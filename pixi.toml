@@ -1,0 +1,32 @@
+[project]
+name = "xtts-fastapi"
+version = "0.1.0"
+description = "OpenAI-compatible XTTS v2 FastAPI server"
+authors = []
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+
+[tasks]
+serve = "scripts\\serve.bat"
+install-torch-cpu = "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
+install-torch-cuda = "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124"
+install-torch-rocm = "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2"
+install-deepspeed = "pip install deepspeed==0.16.5"
+install-all = { depends-on = ["install-torch-cpu"] }
+check-runtime = "python -c \"import torch; print(f'Torch {torch.__version__} CUDA available: {torch.cuda.is_available()}')\""
+
+[dependencies]
+python = "3.12.*"
+pip = "*"
+
+[target.win-64.dependencies]
+cuda-nvcc = "12.6.*"
+
+[pypi-dependencies]
+fastapi = ">=0.115.0"
+uvicorn = { version = ">=0.34.0", extras = ["standard"] }
+pydantic = ">=2.0.0"
+pydantic-settings = ">=2.0.0"
+python-multipart = ">=0.0.9"
+soundfile = ">=0.12.0"
+numpy = ">=1.26.0"

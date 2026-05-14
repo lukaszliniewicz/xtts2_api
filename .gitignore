@@ -1,0 +1,38 @@
+# pixi
+.pixi/
+*.lock
+
+# models
+models/*/
+
+# voices
+voices/*/
+
+# binaries
+bin/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# env
+.env
+.envrc
+.env.example
+
+# logs
+*.log
+
+# temp
+tmp/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
