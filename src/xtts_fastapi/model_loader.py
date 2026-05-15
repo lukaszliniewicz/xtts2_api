@@ -4,8 +4,56 @@ import logging
 import os
 import platform
 import inspect
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+
+def _nvcc_name() -> str:
+    return "nvcc.exe" if platform.system() == "Windows" else "nvcc"
+
+
+def _is_cuda_home(path: str | None) -> bool:
+    if not path:
+        return False
+    root = Path(path)
+    return (root / "bin" / _nvcc_name()).is_file()
+
+
+def _configure_cuda_home_from_env() -> None:
+    if _is_cuda_home(os.environ.get("CUDA_HOME")):
+        return
+
+    cuda_path = os.environ.get("CUDA_PATH")
+    if _is_cuda_home(cuda_path):
+        os.environ["CUDA_HOME"] = cuda_path  # type: ignore[index]
+        return
+
+    prefix = Path(sys.prefix)
+    candidates: list[Path] = []
+    if platform.system() == "Windows":
+        candidates.append(prefix / "Library")
+    else:
+        candidates.append(prefix)
+
+    for candidate in candidates:
+        cuda_home = str(candidate)
+        if not _is_cuda_home(cuda_home):
+            continue
+
+        os.environ["CUDA_HOME"] = cuda_home
+        if platform.system() == "Windows":
+            os.environ.setdefault("CUDA_PATH", cuda_home)
+
+        bin_dir = str(candidate / "bin")
+        current_path = os.environ.get("PATH", "")
+        paths = current_path.split(os.pathsep) if current_path else []
+        if all(Path(p).resolve() != Path(bin_dir).resolve() for p in paths if p):
+            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{current_path}" if current_path else bin_dir
+        return
+
+
+_configure_cuda_home_from_env()
 
 import torch
 
