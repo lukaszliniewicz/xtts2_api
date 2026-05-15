@@ -9,7 +9,12 @@ import numpy as np
 import torch
 
 from .audio import convert_wav_bytes, numpy_to_wav, SAMPLE_RATE
-from .errors import missing_speaker_wav, unsupported_language
+from .errors import (
+    invalid_reference_audio,
+    missing_speaker_wav,
+    reference_audio_too_short,
+    unsupported_language,
+)
 from .file_store import file_store
 from .model_loader import XTTSWrapper, XTTS_LANGUAGES, is_xtts_model
 from .registry import ModelInfo
@@ -88,6 +93,29 @@ class InferenceEngine:
                         return (gpt, spk)
         return None
 
+    def _validate_reference_audio_paths(self, paths: list[str]) -> None:
+        if not paths:
+            return
+
+        min_seconds = settings.min_ref_audio_seconds
+        if min_seconds <= 0:
+            return
+
+        import soundfile as sf
+
+        for path in paths:
+            try:
+                info = sf.info(path)
+            except Exception as exc:
+                raise invalid_reference_audio(path) from exc
+
+            duration = 0.0
+            if info.samplerate and info.samplerate > 0 and info.frames is not None:
+                duration = float(info.frames) / float(info.samplerate)
+
+            if duration < min_seconds:
+                raise reference_audio_too_short(path, duration, min_seconds)
+
     def _build_inference_kwargs(self, xtts_params: XTTSParams | None, *, for_stream: bool) -> dict:
         kwargs = {
             "temperature": settings.temperature,
@@ -137,16 +165,20 @@ class InferenceEngine:
         kwargs = {
             "gpt_cond_len": settings.gpt_cond_len,
             "gpt_cond_chunk_len": settings.gpt_cond_chunk_len,
-            "max_ref_len": settings.max_ref_len,
+            "max_ref_length": settings.max_ref_length,
             "sound_norm_refs": settings.sound_norm_refs,
         }
+
+        if settings.librosa_trim_db is not None:
+            kwargs["librosa_trim_db"] = settings.librosa_trim_db
 
         if xtts_params is not None:
             for attr, kw in [
                 ("gpt_cond_len", "gpt_cond_len"),
                 ("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
-                ("max_ref_len", "max_ref_len"),
+                ("max_ref_length", "max_ref_length"),
                 ("sound_norm_refs", "sound_norm_refs"),
+                ("librosa_trim_db", "librosa_trim_db"),
             ]:
                 val = getattr(xtts_params, attr)
                 if val is not None:
@@ -158,6 +190,8 @@ class InferenceEngine:
         self.validate_language(request.language)
         wrapper = self._get_wrapper(request.model, model_info)
         voice_id, speaker_wav_paths = self._resolve_voice(request)
+        if speaker_wav_paths:
+            self._validate_reference_audio_paths(speaker_wav_paths)
         infer_kwargs = self._build_inference_kwargs(request.xtts, for_stream=False)
         voice_kwargs = self._build_voice_kwargs(request.xtts)
 
@@ -203,6 +237,8 @@ class InferenceEngine:
         self.validate_language(request.language)
         wrapper = self._get_wrapper(request.model, model_info)
         voice_id, speaker_wav_paths = self._resolve_voice(request)
+        if speaker_wav_paths:
+            self._validate_reference_audio_paths(speaker_wav_paths)
         infer_kwargs = self._build_inference_kwargs(request.xtts, for_stream=True)
         voice_kwargs = self._build_voice_kwargs(request.xtts)
 

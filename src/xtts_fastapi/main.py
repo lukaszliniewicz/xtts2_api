@@ -108,10 +108,18 @@ def _parse_instruction_overrides(instructions: str | None) -> tuple[str | None, 
     if "temp" in payload and "temperature" not in xtts_overrides:
         xtts_overrides["temperature"] = payload["temp"]
 
+    if "max_ref_len" in payload and "max_ref_length" not in xtts_overrides:
+        xtts_overrides["max_ref_length"] = payload["max_ref_len"]
+
     if "temp" in xtts_overrides:
         if "temperature" not in xtts_overrides:
             xtts_overrides["temperature"] = xtts_overrides["temp"]
         xtts_overrides.pop("temp")
+
+    if "max_ref_len" in xtts_overrides:
+        if "max_ref_length" not in xtts_overrides:
+            xtts_overrides["max_ref_length"] = xtts_overrides["max_ref_len"]
+        xtts_overrides.pop("max_ref_len")
 
     return language_override, xtts_overrides or None
 
@@ -271,10 +279,19 @@ async def create_speech(body: CreateSpeechRequest):
 
     body = _apply_instruction_overrides(body)
 
-    try:
-        model_info = registry.get(body.model)
-    except Exception:
-        model_info = None
+    model_info = registry.get(body.model)
+    supported_default_ids = {
+        settings.default_model,
+        "xtts_v2",
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+    }
+    if model_info is None and body.model not in supported_default_ids:
+        raise APIError(
+            f"Model '{body.model}' not found",
+            param="model",
+            code="model_not_found",
+            status=404,
+        )
 
     is_streaming = body.stream_format is not None
 

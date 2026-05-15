@@ -40,3 +40,24 @@ def missing_speaker_wav() -> APIError:
         param="voice",
         code="missing_speaker_wav",
     )
+
+
+def invalid_reference_audio(path: str) -> APIError:
+    return APIError(
+        f"Reference audio could not be read: {path}",
+        param="speaker_wav",
+        code="invalid_reference_audio",
+        status=422,
+    )
+
+
+def reference_audio_too_short(path: str, duration: float, min_seconds: float) -> APIError:
+    return APIError(
+        (
+            f"Reference audio is too short: {path} "
+            f"({duration:.3f}s, minimum {min_seconds:.3f}s)"
+        ),
+        param="speaker_wav",
+        code="reference_audio_too_short",
+        status=422,
+    )

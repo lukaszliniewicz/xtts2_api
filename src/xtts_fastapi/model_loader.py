@@ -5,6 +5,7 @@ import os
 import platform
 import inspect
 import sys
+import gc
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -194,10 +195,10 @@ class XTTSWrapper:
         config = XttsConfig()
         config.load_json(str(config_path))
         model = Xtts.init_from_config(config)
-        model.load_checkpoint(
-            config,
+        model = self._load_checkpoint_with_fallback(
+            model=model,
+            config=config,
             checkpoint_dir=str(model_path),
-            use_deepspeed=self.use_deepspeed,
         )
         model.to(torch.device(self.device))
         self.xtts_model = model
@@ -214,7 +215,11 @@ class XTTSWrapper:
             config = XttsConfig()
             config.load_json(str(cached_path / "config.json"))
             model = Xtts.init_from_config(config)
-            model.load_checkpoint(config, checkpoint_dir=str(cached_path), use_deepspeed=self.use_deepspeed)
+            model = self._load_checkpoint_with_fallback(
+                model=model,
+                config=config,
+                checkpoint_dir=str(cached_path),
+            )
             model.to(torch.device(self.device))
             self.xtts_model = model
             self._speaker_manager = getattr(model, "speaker_manager", None)
@@ -223,36 +228,78 @@ class XTTSWrapper:
         if settings.coqui_tos_agreed:
             os.environ["COQUI_TOS_AGREED"] = "1"
         logger.info("Downloading default model from HuggingFace (one-time)...")
-        tts = TTSSDK(settings.default_model).to(self.device)
+        try:
+            tts = TTSSDK(settings.default_model).to(self.device)
+        except RuntimeError as exc:
+            if not (self.device.startswith("cuda") and self._is_cuda_runtime_error(exc)):
+                raise
+            logger.warning(
+                "CUDA runtime error while loading default model (%s). Retrying on CPU.",
+                str(exc).splitlines()[0],
+            )
+            self.use_deepspeed = False
+            self.device = "cpu"
+            tts = TTSSDK(settings.default_model).to(self.device)
         self.xtts_model = tts.synthesizer.tts_model
         self._speaker_manager = getattr(self.xtts_model, "speaker_manager", None)
 
     def get_conditioning_latents(self, audio_path: list[str], **kwargs):
         self.load()
         supported_kwargs = self._supported_kwargs(self.model.get_conditioning_latents, kwargs)
-        return self.model.get_conditioning_latents(audio_path=audio_path, **supported_kwargs)
+        try:
+            return self.model.get_conditioning_latents(audio_path=audio_path, **supported_kwargs)
+        except RuntimeError as exc:
+            if self._fallback_to_cpu(exc, "conditioning"):
+                return self.model.get_conditioning_latents(audio_path=audio_path, **supported_kwargs)
+            raise
 
     def synthesize(self, text: str, language: str, gpt_cond_latent, speaker_embedding, **kwargs):
         self.load()
         supported_kwargs = self._supported_kwargs(self.model.inference, kwargs)
-        return self.model.inference(
-            text=text,
-            language=language,
-            gpt_cond_latent=gpt_cond_latent,
-            speaker_embedding=speaker_embedding,
-            **supported_kwargs,
-        )
+        try:
+            return self.model.inference(
+                text=text,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+                **supported_kwargs,
+            )
+        except RuntimeError as exc:
+            if self._fallback_to_cpu(exc, "inference"):
+                return self.model.inference(
+                    text=text,
+                    language=language,
+                    gpt_cond_latent=self._to_device(gpt_cond_latent),
+                    speaker_embedding=self._to_device(speaker_embedding),
+                    **supported_kwargs,
+                )
+            raise
 
     def synthesize_stream(self, text: str, language: str, gpt_cond_latent, speaker_embedding, **kwargs):
         self.load()
         supported_kwargs = self._supported_kwargs(self.model.inference_stream, kwargs)
-        return self.model.inference_stream(
-            text=text,
-            language=language,
-            gpt_cond_latent=gpt_cond_latent,
-            speaker_embedding=speaker_embedding,
-            **supported_kwargs,
-        )
+        yielded = False
+        try:
+            for chunk in self.model.inference_stream(
+                text=text,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+                **supported_kwargs,
+            ):
+                yielded = True
+                yield chunk
+        except RuntimeError as exc:
+            if yielded or not self._fallback_to_cpu(exc, "stream_inference"):
+                raise
+            for chunk in self.model.inference_stream(
+                text=text,
+                language=language,
+                gpt_cond_latent=self._to_device(gpt_cond_latent),
+                speaker_embedding=self._to_device(speaker_embedding),
+                **supported_kwargs,
+            ):
+                yield chunk
 
     def _supported_kwargs(self, fn, kwargs: dict) -> dict:
         if not kwargs:
@@ -276,3 +323,83 @@ class XTTSWrapper:
         if dropped:
             logger.debug("Dropping unsupported XTTS kwargs for %s: %s", fn.__name__, ", ".join(dropped))
         return filtered
+
+    def _load_checkpoint_with_fallback(self, model, config, checkpoint_dir: str):
+        use_deepspeed = self.use_deepspeed and self.device.startswith("cuda")
+
+        try:
+            model.load_checkpoint(
+                config,
+                checkpoint_dir=checkpoint_dir,
+                use_deepspeed=use_deepspeed,
+            )
+            return model
+        except Exception as exc:
+            if not use_deepspeed:
+                raise
+
+            logger.warning(
+                "DeepSpeed checkpoint load failed (%s). Retrying without DeepSpeed.",
+                str(exc).splitlines()[0],
+            )
+
+            self.use_deepspeed = False
+            model = Xtts.init_from_config(config)
+            model.load_checkpoint(
+                config,
+                checkpoint_dir=checkpoint_dir,
+                use_deepspeed=False,
+            )
+            return model
+
+    def _fallback_to_cpu(self, exc: RuntimeError, stage: str) -> bool:
+        if not self.device.startswith("cuda"):
+            return False
+
+        if not self._is_cuda_runtime_error(exc):
+            return False
+
+        logger.warning(
+            "CUDA runtime error during %s (%s). Falling back to CPU for this model instance.",
+            stage,
+            str(exc).splitlines()[0],
+        )
+
+        self.use_deepspeed = False
+        self.device = "cpu"
+        self.xtts_model = None
+        self._speaker_manager = None
+        self._loaded = False
+
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+        gc.collect()
+        self.load()
+        return True
+
+    @staticmethod
+    def _is_cuda_runtime_error(exc: RuntimeError) -> bool:
+        msg = str(exc).lower()
+        markers = [
+            "cuda error",
+            "device-side assert",
+            "cublas",
+            "cudnn",
+            "illegal memory access",
+        ]
+        return any(marker in msg for marker in markers)
+
+    def _to_device(self, value):
+        if torch.is_tensor(value):
+            return value.to(self.device)
+        if isinstance(value, tuple):
+            return tuple(self._to_device(v) for v in value)
+        if isinstance(value, list):
+            return [self._to_device(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self._to_device(v) for k, v in value.items()}
+        return value

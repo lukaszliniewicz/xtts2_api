@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class OpenAIModel(BaseModel):
@@ -80,8 +80,13 @@ class XTTSParams(BaseModel):
     enable_text_splitting: bool | None = None
     gpt_cond_len: int | None = Field(default=None, ge=1)
     gpt_cond_chunk_len: int | None = Field(default=None, ge=1)
-    max_ref_len: int | None = Field(default=None, ge=1)
+    max_ref_length: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("max_ref_length", "max_ref_len"),
+    )
     sound_norm_refs: bool | None = None
+    librosa_trim_db: int | None = Field(default=None, ge=0)
     stream_chunk_size: int | None = Field(default=None, ge=1)
     overlap_wav_len: int | None = Field(default=None, ge=0)
     hf_generate_kwargs: dict[str, Any] | None = None

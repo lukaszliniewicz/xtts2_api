@@ -243,7 +243,7 @@ Use `xtts` directly whenever your client supports it. The `instructions` JSON pa
 is a compatibility fallback for LiteLLM `aspeech()` versions that do not forward
 `extra_body`.
 
-`gpt_cond_len`, `gpt_cond_chunk_len`, `max_ref_len`, and `sound_norm_refs` are
+`gpt_cond_len`, `gpt_cond_chunk_len`, `max_ref_length`, and `sound_norm_refs` are
 conditioning-audio options. They are applied when extracting speaker latents and
 are not forwarded to HuggingFace `generate()` kwargs.
 
@@ -252,15 +252,16 @@ are not forwarded to HuggingFace `generate()` kwargs.
 | `temperature` | `0.7` | 0.0–2.0 | Softmax temperature. Lower = more stable, higher = more expressive but riskier |
 | `top_p` | `0.85` | 0.0–1.0 | Nucleus sampling cutoff |
 | `top_k` | `50` | 0+ | Top-k sampling limit |
-| `repetition_penalty` | `2.5` | 0.0–100.0 | Penalize repeated tokens. Higher = fewer stutters/hallucinations |
+| `repetition_penalty` | `5.0` | 0.0–100.0 | Penalize repeated tokens. Higher = fewer stutters/hallucinations |
 | `length_penalty` | `1.0` | -10.0–10.0 | Length penalty. Slightly above 1.0 can prevent early cutoffs |
 | `do_sample` | *(true)* | bool | Enable sampling (required for temp/top_p/top_k to work) |
 | `num_beams` | `1` | 1+ | Beam search width. >1 is slower with marginal quality gain |
 | `enable_text_splitting` | `false` | bool | Split text into sentences for unlimited length. Disabled = better prosody but ~400 token limit |
 | `gpt_cond_len` | `12` | 1+ sec | Seconds of reference audio for GPT conditioning |
-| `gpt_cond_chunk_len` | `4` | 1+ sec | Chunk size for conditioning audio processing |
-| `max_ref_len` | `12` | 1+ sec | Max seconds of reference audio for decoder embedding |
-| `sound_norm_refs` | `false` | bool | Normalize reference audio loudness |
+| `gpt_cond_chunk_len` | `6` | 1+ sec | Chunk size for conditioning audio processing |
+| `max_ref_length` | `12` | 1+ sec | Max seconds of reference audio for decoder embedding (`max_ref_len` alias is accepted) |
+| `sound_norm_refs` | `true` | bool | Normalize reference audio loudness |
+| `librosa_trim_db` | — | 0+ | Optional silence-trim threshold for reference audio preprocessing |
 | `stream_chunk_size` | `20` | 1+ tokens | GPT tokens per stream chunk (lower = lower latency) |
 | `overlap_wav_len` | `1024` | 0+ samples | Cross-fade samples between stream chunks (~42ms at 24kHz) |
 | `hf_generate_kwargs` | — | object | Raw kwargs passed to HuggingFace `generate()` |
@@ -288,7 +289,7 @@ Set via environment variables with `XTTS_` prefix or in a `.env` file:
 XTTS_DEVICE=auto
 XTTS_COQUI_TOS_AGREED=true
 XTTS_TEMPERATURE=0.7
-XTTS_REPETITION_PENALTY=2.5
+XTTS_REPETITION_PENALTY=5.0
 ```
 
 | Variable | Default | Description |
@@ -303,13 +304,15 @@ XTTS_REPETITION_PENALTY=2.5
 | `XTTS_TEMPERATURE` | `0.7` | See XTTS Parameters |
 | `XTTS_TOP_P` | `0.85` | |
 | `XTTS_TOP_K` | `50` | |
-| `XTTS_REPETITION_PENALTY` | `2.5` | |
+| `XTTS_REPETITION_PENALTY` | `5.0` | |
 | `XTTS_LENGTH_PENALTY` | `1.0` | |
 | `XTTS_ENABLE_TEXT_SPLITTING` | `false` | |
 | `XTTS_GPT_COND_LEN` | `12` | |
-| `XTTS_GPT_COND_CHUNK_LEN` | `4` | |
-| `XTTS_MAX_REF_LEN` | `12` | |
-| `XTTS_SOUND_NORM_REFS` | `false` | |
+| `XTTS_GPT_COND_CHUNK_LEN` | `6` | |
+| `XTTS_MAX_REF_LENGTH` | `12` | (legacy `XTTS_MAX_REF_LEN` is also accepted) |
+| `XTTS_SOUND_NORM_REFS` | `true` | |
+| `XTTS_LIBROSA_TRIM_DB` | — | Optional silence trim threshold |
+| `XTTS_MIN_REF_AUDIO_SECONDS` | `0.5` | Minimum reference clip duration |
 | `XTTS_STREAM_CHUNK_SIZE` | `20` | |
 | `XTTS_OVERLAP_WAV_LEN` | `1024` | |
 
@@ -343,11 +346,16 @@ DeepSpeed 0.16.5 is automatically installed for CUDA backends. This project pins
 PyTorch 2.6.x to match the available Windows DeepSpeed wheel build. NVIDIA
 driver required; CUDA toolkit is not needed at runtime.
 
+The server keeps DeepSpeed enabled by default on CUDA and automatically retries
+checkpoint loading without DeepSpeed if initialization fails.
+
 ## Notes
 
 - `/v1/files` can store any file type, but XTTS voice cloning works best with clean mono WAV references.
 - Voice samples should be mono WAV files. Any sample rate is fine (resampled to 24kHz).
 - Reference audio quality matters more than quantity. A single clean 6-second
   clip often beats a noisy 30-second clip.
+- If CUDA runtime errors occur during speaker conditioning/inference, the server
+  automatically retries on CPU for that model instance.
 - `enable_text_splitting: false` (default) caps input to ~400 tokens but gives
   natural prosody across sentences. Set to `true` for long-form content.
