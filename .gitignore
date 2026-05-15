@@ -10,6 +10,9 @@ models/*/
 # voices
 voices/*/
 
+# files
+files/*/
+
 # binaries
 bin/
 

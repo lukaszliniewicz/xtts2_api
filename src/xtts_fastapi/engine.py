@@ -10,6 +10,7 @@ import torch
 
 from .audio import convert_wav_bytes, numpy_to_wav, SAMPLE_RATE
 from .errors import missing_speaker_wav, unsupported_language
+from .file_store import file_store
 from .model_loader import XTTSWrapper, XTTS_LANGUAGES, is_xtts_model
 from .registry import ModelInfo
 from .settings import settings
@@ -46,7 +47,14 @@ class InferenceEngine:
         voice_id = request.voice_id
 
         if request.speaker_wav:
-            return voice_id, request.speaker_wav
+            resolved = []
+            for item in request.speaker_wav:
+                file_path = file_store.get_content_path(item)
+                if file_path is not None:
+                    resolved.append(str(file_path))
+                else:
+                    resolved.append(item)
+            return voice_id, resolved
 
         if voice_id:
             meta = voice_store.get(voice_id)
@@ -55,6 +63,10 @@ class InferenceEngine:
                 if sample_paths:
                     return voice_id, [str(p) for p in sample_paths]
                 logger.warning("Voice '%s' has no samples, trying speaker lookup", voice_id)
+
+            file_path = file_store.get_content_path(voice_id)
+            if file_path is not None:
+                return voice_id, [str(file_path)]
 
         return voice_id, None
 
@@ -76,7 +88,7 @@ class InferenceEngine:
                         return (gpt, spk)
         return None
 
-    def _build_inference_kwargs(self, xtts_params: XTTSParams | None) -> dict:
+    def _build_inference_kwargs(self, xtts_params: XTTSParams | None, *, for_stream: bool) -> dict:
         kwargs = {
             "temperature": settings.temperature,
             "top_p": settings.top_p,
@@ -84,9 +96,11 @@ class InferenceEngine:
             "repetition_penalty": settings.repetition_penalty,
             "length_penalty": settings.length_penalty,
             "enable_text_splitting": settings.enable_text_splitting,
-            "stream_chunk_size": settings.stream_chunk_size,
-            "overlap_wav_len": settings.overlap_wav_len,
         }
+
+        if for_stream:
+            kwargs["stream_chunk_size"] = settings.stream_chunk_size
+            kwargs["overlap_wav_len"] = settings.overlap_wav_len
 
         if xtts_params is not None:
             pairs = [
@@ -102,13 +116,21 @@ class InferenceEngine:
                 ("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
                 ("max_ref_len", "max_ref_len"),
                 ("sound_norm_refs", "sound_norm_refs"),
-                ("stream_chunk_size", "stream_chunk_size"),
-                ("overlap_wav_len", "overlap_wav_len"),
             ]
             for attr, kw in pairs:
                 val = getattr(xtts_params, attr)
                 if val is not None:
                     kwargs[kw] = val
+
+            if for_stream:
+                stream_pairs = [
+                    ("stream_chunk_size", "stream_chunk_size"),
+                    ("overlap_wav_len", "overlap_wav_len"),
+                ]
+                for attr, kw in stream_pairs:
+                    val = getattr(xtts_params, attr)
+                    if val is not None:
+                        kwargs[kw] = val
 
             if xtts_params.hf_generate_kwargs:
                 kwargs.update(xtts_params.hf_generate_kwargs)
@@ -140,7 +162,7 @@ class InferenceEngine:
         self.validate_language(request.language)
         wrapper = self._get_wrapper(request.model, model_info)
         voice_id, speaker_wav_paths = self._resolve_voice(request)
-        infer_kwargs = self._build_inference_kwargs(request.xtts)
+        infer_kwargs = self._build_inference_kwargs(request.xtts, for_stream=False)
         voice_kwargs = self._build_voice_kwargs(request.xtts)
 
         lock = self._get_lock(request.model)
@@ -185,7 +207,7 @@ class InferenceEngine:
         self.validate_language(request.language)
         wrapper = self._get_wrapper(request.model, model_info)
         voice_id, speaker_wav_paths = self._resolve_voice(request)
-        infer_kwargs = self._build_inference_kwargs(request.xtts)
+        infer_kwargs = self._build_inference_kwargs(request.xtts, for_stream=True)
         voice_kwargs = self._build_voice_kwargs(request.xtts)
 
         lock = self._get_lock(request.model)

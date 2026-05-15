@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import inspect
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -180,24 +181,50 @@ class XTTSWrapper:
 
     def get_conditioning_latents(self, audio_path: list[str], **kwargs):
         self.load()
-        return self.model.get_conditioning_latents(audio_path=audio_path, **kwargs)
+        supported_kwargs = self._supported_kwargs(self.model.get_conditioning_latents, kwargs)
+        return self.model.get_conditioning_latents(audio_path=audio_path, **supported_kwargs)
 
     def synthesize(self, text: str, language: str, gpt_cond_latent, speaker_embedding, **kwargs):
         self.load()
+        supported_kwargs = self._supported_kwargs(self.model.inference, kwargs)
         return self.model.inference(
             text=text,
             language=language,
             gpt_cond_latent=gpt_cond_latent,
             speaker_embedding=speaker_embedding,
-            **kwargs,
+            **supported_kwargs,
         )
 
     def synthesize_stream(self, text: str, language: str, gpt_cond_latent, speaker_embedding, **kwargs):
         self.load()
+        supported_kwargs = self._supported_kwargs(self.model.inference_stream, kwargs)
         return self.model.inference_stream(
             text=text,
             language=language,
             gpt_cond_latent=gpt_cond_latent,
             speaker_embedding=speaker_embedding,
-            **kwargs,
+            **supported_kwargs,
         )
+
+    def _supported_kwargs(self, fn, kwargs: dict) -> dict:
+        if not kwargs:
+            return kwargs
+
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return kwargs
+
+        has_var_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        )
+        if has_var_kwargs:
+            return kwargs
+
+        allowed = set(sig.parameters.keys())
+        filtered = {k: v for k, v in kwargs.items() if k in allowed}
+        dropped = sorted(k for k in kwargs.keys() if k not in allowed)
+        if dropped:
+            logger.debug("Dropping unsupported XTTS kwargs for %s: %s", fn.__name__, ", ".join(dropped))
+        return filtered

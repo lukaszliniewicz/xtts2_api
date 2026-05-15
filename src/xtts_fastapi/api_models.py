@@ -17,6 +17,30 @@ class ModelList(BaseModel):
     data: list[OpenAIModel]
 
 
+class FileObject(BaseModel):
+    id: str
+    object: str = "file"
+    bytes: int
+    created_at: int
+    filename: str
+    purpose: str
+    status: str = "processed"
+    expires_at: int | None = None
+    status_details: str | None = None
+
+
+class FileListResponse(BaseModel):
+    object: str = "list"
+    data: list[FileObject]
+    has_more: bool = False
+
+
+class FileDeletedResponse(BaseModel):
+    id: str
+    object: str = "file"
+    deleted: bool = True
+
+
 class VoiceFile(BaseModel):
     filename: str
     size: int

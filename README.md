@@ -42,14 +42,14 @@ are untested. Pull requests welcome.
 bin\pixi install
 
 # 2. Install PyTorch for your backend
-bin\pixi run pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+bin\pixi run pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu126
 
 # 3. Install coqui-tts + pin transformers
 bin\pixi run pip install coqui-tts
 bin\pixi run pip install "transformers>=4,<5"
 
 # 4. (CUDA only) Install DeepSpeed
-bin\pixi run pip install deepspeed==0.16.5
+bin\pixi run pip install --no-deps deepspeed==0.16.5
 
 # 5. Start
 bin\pixi run python -m uvicorn src.xtts_fastapi.main:app --host 0.0.0.0 --port 8020
@@ -75,6 +75,32 @@ Server health and status.
 ### `GET /v1/models`
 
 List available models (OpenAI-compatible).
+
+### `POST /v1/files`
+
+Upload a file (OpenAI-compatible multipart endpoint).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | File | Single uploaded file |
+| `purpose` | string | OpenAI-style file purpose (use `user_data` for voice references) |
+
+### `GET /v1/files`
+
+List uploaded files (OpenAI-compatible). Supports `limit`, `after`, `order`, and
+`purpose` query parameters.
+
+### `GET /v1/files/{file_id}`
+
+Retrieve file metadata.
+
+### `GET /v1/files/{file_id}/content`
+
+Download file bytes.
+
+### `DELETE /v1/files/{file_id}`
+
+Delete a file.
 
 ### `GET /v1/voices`
 
@@ -104,20 +130,110 @@ Generate speech (OpenAI-compatible).
 |-------|------|---------|-------------|
 | `model` | string | required | Model ID (e.g. `tts_models/multilingual/multi-dataset/xtts_v2`) |
 | `input` | string | required | Text to synthesize (max 4096 chars) |
-| `voice` | string \| object | required | Voice ID or `{ "id": "..." }` |
+| `voice` | string \| object | required | Voice ID, `{"id":"..."}`, or a file ID from `/v1/files` |
 | `language` | string | `"en"` | Language code |
 | `response_format` | string | `"wav"` | `wav`, `mp3`, `opus`, `aac`, `flac`, `pcm` |
 | `speed` | float | `1.0` | Playback speed (0.25–4.0) |
 | `stream_format` | string | — | `audio` for raw stream, `sse` for SSE events |
 | `speaker_wav` | string[] | — | Direct paths to reference audio (bypasses voice store) |
 | `xtts` | object | — | Per-request XTTS parameter overrides (see below) |
+| `instructions` | string | — | Optional JSON workaround for LiteLLM speech (`{"language":"en","xtts":{...}}`) |
 
 **Response:** Raw audio bytes with `Content-Type: audio/wav` (or the requested format).
+
+## Recommended SDK Flow
+
+For the highest OpenAI/LiteLLM compatibility, upload a voice sample with
+`/v1/files` and pass the returned `file_id` as `voice` in `/v1/audio/speech`.
+
+### OpenAI Python SDK
+
+```python
+from pathlib import Path
+from openai import OpenAI
+
+client = OpenAI(api_key="sk-local", base_url="http://127.0.0.1:8020/v1")
+
+voice_file = client.files.create(
+    file=Path("voice.wav"),
+    purpose="user_data",
+)
+
+speech = client.audio.speech.create(
+    model="tts_models/multilingual/multi-dataset/xtts_v2",
+    input="Hello from XTTS.",
+    voice={"id": voice_file.id},
+    response_format="wav",
+)
+speech.write_to_file("speech.wav")
+
+client.files.delete(voice_file.id)
+```
+
+### LiteLLM Python SDK
+
+LiteLLM currently validates `purpose` against a smaller set, so this example uses
+`assistants`.
+
+Some LiteLLM versions do not forward `extra_body` on `aspeech()` for
+OpenAI-compatible TTS. Use `instructions` with a JSON object as a workaround.
+
+```python
+import asyncio
+import json
+import litellm
+
+
+async def main():
+    with open("voice.wav", "rb") as f:
+        voice_file = await litellm.acreate_file(
+            file=f,
+            purpose="assistants",
+            custom_llm_provider="openai",
+            api_base="http://127.0.0.1:8020/v1",
+            api_key="sk-local",
+        )
+
+    speech = await litellm.aspeech(
+        model="openai/tts_models/multilingual/multi-dataset/xtts_v2",
+        input="Hello from LiteLLM.",
+        voice=voice_file.id,
+        response_format="wav",
+        speed=1.04,
+        instructions=json.dumps(
+            {
+                "language": "en",
+                "xtts": {
+                    "temperature": 0.66,
+                    "top_p": 0.88,
+                    "repetition_penalty": 4.1,
+                },
+            }
+        ),
+        api_base="http://127.0.0.1:8020/v1",
+        api_key="sk-local",
+    )
+    speech.write_to_file("speech.wav")
+
+    await litellm.afile_delete(
+        file_id=voice_file.id,
+        custom_llm_provider="openai",
+        api_base="http://127.0.0.1:8020/v1",
+        api_key="sk-local",
+    )
+
+
+asyncio.run(main())
+```
 
 ### XTTS Parameters
 
 Pass via `xtts` in the speech request body. Values here override the server defaults
 for that request only.
+
+LiteLLM workaround: place the same payload inside `instructions` as JSON,
+for example `{"xtts":{"temperature":0.65}}`. You can also use
+`{"temp":0.65}` as an alias for `temperature`.
 
 | Parameter | Server Default | Range | Description |
 |-----------|---------------|-------|-------------|
@@ -211,12 +327,13 @@ and `vocab.json`.
 
 ## DeepSpeed
 
-DeepSpeed 0.16.5 is automatically installed for CUDA backends. On Windows it
-ships a pre-built cp312 wheel. NVIDIA driver required; CUDA toolkit is not
-needed at runtime.
+DeepSpeed 0.16.5 is automatically installed for CUDA backends. This project pins
+PyTorch 2.6.x to match the available Windows DeepSpeed wheel build. NVIDIA
+driver required; CUDA toolkit is not needed at runtime.
 
 ## Notes
 
+- `/v1/files` can store any file type, but XTTS voice cloning works best with clean mono WAV references.
 - Voice samples should be mono WAV files. Any sample rate is fine (resampled to 24kHz).
 - Reference audio quality matters more than quantity. A single clean 6-second
   clip often beats a noisy 30-second clip.

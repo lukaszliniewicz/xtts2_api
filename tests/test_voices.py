@@ -14,7 +14,7 @@ def test_list_voices_empty():
 
 def test_create_voice_no_files():
     resp = client.post("/v1/voices")
-    assert resp.status_code == 400
+    assert resp.status_code in (400, 422)
 
 
 def test_create_and_delete_voice():

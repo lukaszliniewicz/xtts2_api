@@ -22,6 +22,10 @@ log = logging.getLogger("run")
 PROJECT_DIR = Path(__file__).parent.resolve()
 SERVER_MODULE = "src.xtts_fastapi.main:app"
 
+TORCH_VERSION = "2.6.0"
+TORCHVISION_VERSION = "0.21.0"
+TORCHAUDIO_VERSION = "2.6.0"
+
 os.environ.setdefault("PIP_CACHE_DIR", str(PROJECT_DIR / ".pip-cache"))
 os.environ.setdefault("PIXI_CACHE_DIR", str(PROJECT_DIR / ".pixi-cache"))
 os.environ.setdefault("TMP", str(PROJECT_DIR / ".tmp"))
@@ -119,15 +123,15 @@ def check_backend(backend: str) -> bool:
 
 def ensure_torch(backend: str) -> bool:
     if backend == "cpu":
-        pkgs = "torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0"
+        pkgs = f"torch=={TORCH_VERSION} torchvision=={TORCHVISION_VERSION} torchaudio=={TORCHAUDIO_VERSION}"
         idx = "https://download.pytorch.org/whl/cpu"
     elif backend == "cuda":
-        pkgs = "torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0"
+        pkgs = f"torch=={TORCH_VERSION} torchvision=={TORCHVISION_VERSION} torchaudio=={TORCHAUDIO_VERSION}"
         idx = "https://download.pytorch.org/whl/cu126"
     elif backend == "rocm":
-        pkgs = "torch==2.8.0"
+        pkgs = f"torch=={TORCH_VERSION}"
         if platform.system() != "Windows":
-            pkgs += " torchvision==0.23.0 torchaudio==2.8.0"
+            pkgs += f" torchvision=={TORCHVISION_VERSION} torchaudio=={TORCHAUDIO_VERSION}"
         idx = "https://download.pytorch.org/whl/rocm6.2"
     else:
         log.error("Unknown backend: %s", backend)
@@ -142,7 +146,14 @@ def ensure_torch(backend: str) -> bool:
         log.warning("  torch version: %s", torch.__version__)
         log.warning("  CUDA built: %s", torch.version.cuda)
         log.warning("Falling back to CPU torch")
-        _pip_install("--force-reinstall", "--no-deps", "torch==2.8.0", "--index-url", "https://download.pytorch.org/whl/cpu")
+        _pip_install(
+            "--force-reinstall",
+            f"torch=={TORCH_VERSION}",
+            f"torchvision=={TORCHVISION_VERSION}",
+            f"torchaudio=={TORCHAUDIO_VERSION}",
+            "--index-url",
+            "https://download.pytorch.org/whl/cpu",
+        )
         return True
 
     return True
@@ -166,7 +177,7 @@ def ensure_deepspeed(backend: str) -> None:
     if _check_package("deepspeed"):
         return
     log.info("Installing deepspeed...")
-    _pip_install("deepspeed==0.16.5")
+    _pip_install("--no-deps", "deepspeed==0.16.5")
 
 
 def start_server() -> None:

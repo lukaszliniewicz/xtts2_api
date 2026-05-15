@@ -8,16 +8,28 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 
-from .api_models import CreateSpeechRequest, ModelList, VoiceCreateResponse, VoiceList
+from .api_models import (
+    CreateSpeechRequest,
+    FileDeletedResponse,
+    FileListResponse,
+    FileObject,
+    ModelList,
+    XTTSParams,
+    VoiceCreateResponse,
+    VoiceList,
+)
 from .audio import convert_wav_bytes, SUPPORTED_FORMATS
 from .engine import engine
 from .errors import APIError
+from .file_store import file_store
 from .registry import registry
 from .settings import settings
 from .voices import voice_store
 
 logger = logging.getLogger(__name__)
+INSTRUCTION_XTTS_FIELDS = set(XTTSParams.model_fields.keys())
 
 app = FastAPI(
     title="XTTS FastAPI Server",
@@ -41,6 +53,100 @@ async def startup():
     registry.discover()
 
 
+def _parse_instruction_overrides(instructions: str | None) -> tuple[str | None, dict | None]:
+    if instructions is None:
+        return None, None
+
+    raw = instructions.strip()
+    if not raw or not raw.startswith("{"):
+        return None, None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise APIError(
+            "instructions must be valid JSON when used for XTTS overrides",
+            param="instructions",
+            code="invalid_instructions_json",
+            status=422,
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise APIError(
+            "instructions JSON must decode to an object",
+            param="instructions",
+            code="invalid_instructions_json",
+            status=422,
+        )
+
+    language_override = payload.get("language")
+    if language_override is not None and not isinstance(language_override, str):
+        raise APIError(
+            "instructions.language must be a string",
+            param="instructions",
+            code="invalid_instructions_language",
+            status=422,
+        )
+
+    xtts_overrides: dict[str, object] = {}
+
+    raw_xtts = payload.get("xtts")
+    if raw_xtts is not None:
+        if not isinstance(raw_xtts, dict):
+            raise APIError(
+                "instructions.xtts must be a JSON object",
+                param="instructions",
+                code="invalid_instructions_xtts",
+                status=422,
+            )
+        xtts_overrides.update(raw_xtts)
+
+    for key in INSTRUCTION_XTTS_FIELDS:
+        if key in payload:
+            xtts_overrides[key] = payload[key]
+
+    if "temp" in payload and "temperature" not in xtts_overrides:
+        xtts_overrides["temperature"] = payload["temp"]
+
+    if "temp" in xtts_overrides:
+        if "temperature" not in xtts_overrides:
+            xtts_overrides["temperature"] = xtts_overrides["temp"]
+        xtts_overrides.pop("temp")
+
+    return language_override, xtts_overrides or None
+
+
+def _apply_instruction_overrides(body: CreateSpeechRequest) -> CreateSpeechRequest:
+    language_override, xtts_overrides = _parse_instruction_overrides(body.instructions)
+    if language_override is None and xtts_overrides is None:
+        return body
+
+    payload = body.model_dump()
+
+    default_language = CreateSpeechRequest.model_fields["language"].default
+    if language_override is not None and body.language == default_language:
+        payload["language"] = language_override
+
+    if xtts_overrides is not None:
+        existing_xtts = {}
+        if body.xtts is not None:
+            existing_xtts = body.xtts.model_dump(exclude_none=True)
+        merged_xtts = {**xtts_overrides, **existing_xtts}
+        try:
+            payload["xtts"] = XTTSParams.model_validate(merged_xtts)
+        except ValidationError as exc:
+            details = exc.errors(include_url=False)
+            message = details[0]["msg"] if details else str(exc)
+            raise APIError(
+                f"Invalid XTTS overrides in instructions: {message}",
+                param="instructions",
+                code="invalid_instructions_xtts",
+                status=422,
+            ) from exc
+
+    return CreateSpeechRequest.model_validate(payload)
+
+
 @app.get("/health")
 async def health():
     return {
@@ -58,6 +164,58 @@ async def list_models():
     if not models:
         return ModelList(data=[])
     return ModelList(data=[m.to_openai() for m in models])
+
+
+@app.post("/v1/files", response_model=FileObject)
+async def create_file(
+    file: UploadFile = File(..., description="File to upload"),
+    purpose: str = Form(..., description="File purpose"),
+):
+    filename = file.filename or "upload.bin"
+    content = await file.read()
+    return file_store.create(filename=filename, data=content, purpose=purpose)
+
+
+@app.get("/v1/files", response_model=FileListResponse)
+async def list_files(
+    limit: int = Query(default=100, ge=1, le=10_000),
+    order: str = Query(default="desc", pattern=r"^(asc|desc)$"),
+    purpose: str | None = Query(default=None),
+    after: str | None = Query(default=None),
+):
+    return file_store.list_all(limit=limit, after=after, order=order, purpose=purpose)
+
+
+@app.get("/v1/files/{file_id}", response_model=FileObject)
+async def retrieve_file(file_id: str):
+    file_obj = file_store.get(file_id)
+    if file_obj is None:
+        raise APIError(f"File '{file_id}' not found", param="file_id", code="file_not_found", status=404)
+    return file_obj
+
+
+@app.get("/v1/files/{file_id}/content")
+async def retrieve_file_content(file_id: str):
+    file_obj = file_store.get(file_id)
+    if file_obj is None:
+        raise APIError(f"File '{file_id}' not found", param="file_id", code="file_not_found", status=404)
+
+    content = file_store.get_content(file_id)
+    if content is None:
+        raise APIError(f"File '{file_id}' content is missing", param="file_id", code="file_not_found", status=404)
+
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{file_obj.filename}"'},
+    )
+
+
+@app.delete("/v1/files/{file_id}", response_model=FileDeletedResponse)
+async def delete_file(file_id: str):
+    if not file_store.delete(file_id):
+        raise APIError(f"File '{file_id}' not found", param="file_id", code="file_not_found", status=404)
+    return file_store.delete_response(file_id)
 
 
 @app.get("/v1/voices", response_model=VoiceList)
@@ -109,6 +267,8 @@ async def create_speech(body: CreateSpeechRequest):
             param="response_format",
             code="unsupported_format",
         )
+
+    body = _apply_instruction_overrides(body)
 
     try:
         model_info = registry.get(body.model)

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     port: int = 8020
     models_dir: Path = Path("models")
     voices_dir: Path = Path("voices")
+    files_dir: Path = Path("files")
     coqui_tos_agreed: bool = False
     device: str = "auto"
     use_deepspeed: bool = True
