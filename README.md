@@ -14,6 +14,10 @@ bash run.sh
 
 # Force CPU (no GPU detection)
 run.bat --cpu
+
+# Use an existing pixi binary (skip pixi download)
+run.bat --pixi-path "D:\\tools\\pixi.exe"
+bash run.sh --pixi-path /usr/local/bin/pixi
 ```
 
 The bootstrapper downloads pixi, creates a Python 3.12 environment, detects your

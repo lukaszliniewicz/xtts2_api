@@ -25,6 +25,7 @@ SERVER_MODULE = "src.xtts_fastapi.main:app"
 TORCH_VERSION = "2.6.0"
 TORCHVISION_VERSION = "0.21.0"
 TORCHAUDIO_VERSION = "2.6.0"
+PIXI_PATH_OVERRIDE: Path | None = None
 
 os.environ.setdefault("PIP_CACHE_DIR", str(PROJECT_DIR / ".pip-cache"))
 os.environ.setdefault("PIXI_CACHE_DIR", str(PROJECT_DIR / ".pixi-cache"))
@@ -33,11 +34,18 @@ os.environ.setdefault("TEMP", str(PROJECT_DIR / ".tmp"))
 
 
 def _find_pixi() -> str:
-    exe = "pixi.exe" if platform.system() == "Windows" else "pixi"
-    path = PROJECT_DIR / "bin" / exe
+    if PIXI_PATH_OVERRIDE is not None:
+        path = PIXI_PATH_OVERRIDE
+    else:
+        exe = "pixi.exe" if platform.system() == "Windows" else "pixi"
+        path = PROJECT_DIR / "bin" / exe
+
     if not path.is_file():
         log.error("pixi not found at %s", path)
-        log.error("Run run.bat (Windows) or run.sh (Linux/macOS) first.")
+        if PIXI_PATH_OVERRIDE is not None:
+            log.error("The value passed to --pixi-path must point to an existing pixi binary.")
+        else:
+            log.error("Run run.bat (Windows) or run.sh (Linux/macOS) first.")
         sys.exit(1)
     return str(path)
 
@@ -208,7 +216,16 @@ def main() -> None:
         "--backend", choices=["auto", "cuda", "rocm", "cpu"], default="auto",
         help="Force a specific backend (default: auto-detect)",
     )
+    parser.add_argument(
+        "--pixi-path",
+        help="Path to an existing pixi binary (used instead of project-local bin/pixi)",
+    )
     args = parser.parse_args()
+
+    global PIXI_PATH_OVERRIDE
+    if args.pixi_path:
+        PIXI_PATH_OVERRIDE = Path(args.pixi_path).expanduser().resolve()
+        log.info("Using pixi binary: %s", PIXI_PATH_OVERRIDE)
 
     backend = args.backend if args.backend != "auto" else detect_hardware(args.cpu)
     log.info("Selected backend: %s", backend)
