@@ -1,0 +1,40 @@
+[project]
+name = "xtts-fastapi"
+version = "0.1.0"
+description = "OpenAI-compatible XTTS v2 FastAPI server"
+requires-python = ">=3.12"
+authors = []
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-multipart>=0.0.9",
+    "soundfile>=0.12.0",
+    "numpy>=1.26.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+requires-pixi = ">=0.68.0"
+
+[tool.pixi.dependencies]
+python = "3.12.*"
+pip = "*"
+ffmpeg = "*"
+
+[tool.pixi.pypi-dependencies]
+xtts-fastapi = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+start = "python run.py"
+start-cpu = "python run.py --cpu"
+check = "python -c \"import torch; print(f'Torch {torch.__version__} CUDA: {torch.cuda.is_available()}')\""
+
+[tool.pixi.target.win-64.dependencies]
+cuda-nvcc = "12.6.*"

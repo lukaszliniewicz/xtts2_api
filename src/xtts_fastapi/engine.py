@@ -77,50 +77,62 @@ class InferenceEngine:
         return None
 
     def _build_inference_kwargs(self, xtts_params: XTTSParams | None) -> dict:
-        kwargs = {}
-        if xtts_params is None:
-            return kwargs
+        kwargs = {
+            "temperature": settings.temperature,
+            "top_p": settings.top_p,
+            "top_k": settings.top_k,
+            "repetition_penalty": settings.repetition_penalty,
+            "length_penalty": settings.length_penalty,
+            "enable_text_splitting": settings.enable_text_splitting,
+            "stream_chunk_size": settings.stream_chunk_size,
+            "overlap_wav_len": settings.overlap_wav_len,
+        }
 
-        pairs = [
-            ("temperature", "temperature"),
-            ("top_p", "top_p"),
-            ("top_k", "top_k"),
-            ("repetition_penalty", "repetition_penalty"),
-            ("length_penalty", "length_penalty"),
-            ("do_sample", "do_sample"),
-            ("num_beams", "num_beams"),
-            ("enable_text_splitting", "enable_text_splitting"),
-            ("gpt_cond_len", "gpt_cond_len"),
-            ("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
-            ("max_ref_len", "max_ref_len"),
-            ("sound_norm_refs", "sound_norm_refs"),
-            ("stream_chunk_size", "stream_chunk_size"),
-            ("overlap_wav_len", "overlap_wav_len"),
-        ]
-        for attr, kw in pairs:
-            val = getattr(xtts_params, attr)
-            if val is not None:
-                kwargs[kw] = val
+        if xtts_params is not None:
+            pairs = [
+                ("temperature", "temperature"),
+                ("top_p", "top_p"),
+                ("top_k", "top_k"),
+                ("repetition_penalty", "repetition_penalty"),
+                ("length_penalty", "length_penalty"),
+                ("do_sample", "do_sample"),
+                ("num_beams", "num_beams"),
+                ("enable_text_splitting", "enable_text_splitting"),
+                ("gpt_cond_len", "gpt_cond_len"),
+                ("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
+                ("max_ref_len", "max_ref_len"),
+                ("sound_norm_refs", "sound_norm_refs"),
+                ("stream_chunk_size", "stream_chunk_size"),
+                ("overlap_wav_len", "overlap_wav_len"),
+            ]
+            for attr, kw in pairs:
+                val = getattr(xtts_params, attr)
+                if val is not None:
+                    kwargs[kw] = val
 
-        if xtts_params.hf_generate_kwargs:
-            kwargs.update(xtts_params.hf_generate_kwargs)
+            if xtts_params.hf_generate_kwargs:
+                kwargs.update(xtts_params.hf_generate_kwargs)
 
         return kwargs
 
     def _build_voice_kwargs(self, xtts_params: XTTSParams | None) -> dict:
-        kwargs = {}
-        if xtts_params is None:
-            return kwargs
+        kwargs = {
+            "gpt_cond_len": settings.gpt_cond_len,
+            "gpt_cond_chunk_len": settings.gpt_cond_chunk_len,
+            "max_ref_len": settings.max_ref_len,
+            "sound_norm_refs": settings.sound_norm_refs,
+        }
 
-        for attr, kw in [
-            ("gpt_cond_len", "gpt_cond_len"),
-            ("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
-            ("max_ref_len", "max_ref_len"),
-            ("sound_norm_refs", "sound_norm_refs"),
-        ]:
-            val = getattr(xtts_params, attr)
-            if val is not None:
-                kwargs[kw] = val
+        if xtts_params is not None:
+            for attr, kw in [
+                ("gpt_cond_len", "gpt_cond_len"),
+                ("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
+                ("max_ref_len", "max_ref_len"),
+                ("sound_norm_refs", "sound_norm_refs"),
+            ]:
+                val = getattr(xtts_params, attr)
+                if val is not None:
+                    kwargs[kw] = val
 
         return kwargs
 

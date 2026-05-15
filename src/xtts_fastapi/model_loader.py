@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,14 +44,64 @@ def is_xtts_model(model_id: str) -> bool:
     return "xtts" in model_id.lower()
 
 
+def _coqui_cache_root() -> Path:
+    system = platform.system()
+    if system == "Windows":
+        return Path(os.environ.get("APPDATA", "")) / "tts"
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "tts"
+    return Path.home() / ".local" / "share" / "tts"
+
+
+def _find_cached_default() -> Path | None:
+    model_name = settings.default_model
+
+    # Check local models/ directory first
+    local = settings.models_dir / model_name
+    if local.is_dir() and (local / "config.json").is_file():
+        logger.info("Found default model in local models/ directory")
+        return local
+
+    # Check coqui-tts cache
+    cached = _coqui_cache_root() / model_name
+    if cached.is_dir() and (cached / "config.json").is_file():
+        logger.info("Found default model in coqui cache")
+        return cached
+
+    # Check HF_HOME cache
+    hf_home = Path(os.environ.get("HF_HOME", ""))
+    if hf_home.is_dir():
+        hf_cached = hf_home / "models" / model_name
+        if hf_cached.is_dir() and (hf_cached / "config.json").is_file():
+            logger.info("Found default model in HF_HOME cache")
+            return hf_cached
+
+    return None
+
+
 def _resolve_device() -> str:
     dev = settings.device
-    if dev == "cuda" and not torch.cuda.is_available():
-        logger.warning("CUDA requested but not available, falling back to CPU")
-        return "cpu"
-    if dev == "cpu":
-        return "cpu"
-    return dev
+
+    # If user explicitly chose a device, respect it (with fallback)
+    if dev != "auto":
+        if dev in ("cuda", "hip") and not torch.cuda.is_available():
+            logger.warning("CUDA/ROCm requested but not available, falling back to CPU")
+            return "cpu"
+        if dev == "cpu":
+            return "cpu"
+        return dev
+
+    # Auto-detect: CUDA/ROCm -> CPU
+    if torch.cuda.is_available():
+        cuda_name = torch.cuda.get_device_name(0).lower()
+        if "amd" in cuda_name or "hip" in cuda_name or "radeon" in cuda_name:
+            logger.info("Auto-detected AMD GPU via ROCm: %s", torch.cuda.get_device_name(0))
+        else:
+            logger.info("Auto-detected CUDA device: %s", torch.cuda.get_device_name(0))
+        return "cuda"
+
+    logger.warning("No GPU accelerator found, using CPU (this will be slow)")
+    return "cpu"
 
 
 class XTTSWrapper:
@@ -106,6 +157,23 @@ class XTTSWrapper:
     def _load_default(self):
         if not HAS_TTS_SDK:
             raise ImportError("coqui-tts SDK not available")
+
+        # Try loading from local cache first, avoiding HF download
+        cached_path = _find_cached_default()
+        if cached_path is not None:
+            logger.info("Loading default model from %s", cached_path)
+            config = XttsConfig()
+            config.load_json(str(cached_path / "config.json"))
+            model = Xtts.init_from_config(config)
+            model.load_checkpoint(config, checkpoint_dir=str(cached_path), use_deepspeed=self.use_deepspeed)
+            model.to(torch.device(self.device))
+            self.xtts_model = model
+            self._speaker_manager = getattr(model, "speaker_manager", None)
+            return
+
+        if settings.coqui_tos_agreed:
+            os.environ["COQUI_TOS_AGREED"] = "1"
+        logger.info("Downloading default model from HuggingFace (one-time)...")
         tts = TTSSDK(settings.default_model).to(self.device)
         self.xtts_model = tts.synthesizer.tts_model
         self._speaker_manager = getattr(self.xtts_model, "speaker_manager", None)
