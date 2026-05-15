@@ -84,6 +84,10 @@ Upload a file (OpenAI-compatible multipart endpoint).
 |-------|------|-------------|
 | `file` | File | Single uploaded file |
 | `purpose` | string | OpenAI-style file purpose (use `user_data` for voice references) |
+| `name` | string | Optional filename override (stored in response as `filename`) |
+
+File objects follow OpenAI naming and expose `filename` (there is no separate
+`name` field in the response).
 
 ### `GET /v1/files`
 
@@ -234,6 +238,14 @@ for that request only.
 LiteLLM workaround: place the same payload inside `instructions` as JSON,
 for example `{"xtts":{"temperature":0.65}}`. You can also use
 `{"temp":0.65}` as an alias for `temperature`.
+
+Use `xtts` directly whenever your client supports it. The `instructions` JSON path
+is a compatibility fallback for LiteLLM `aspeech()` versions that do not forward
+`extra_body`.
+
+`gpt_cond_len`, `gpt_cond_chunk_len`, `max_ref_len`, and `sound_norm_refs` are
+conditioning-audio options. They are applied when extracting speaker latents and
+are not forwarded to HuggingFace `generate()` kwargs.
 
 | Parameter | Server Default | Range | Description |
 |-----------|---------------|-------|-------------|

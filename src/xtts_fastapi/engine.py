@@ -112,10 +112,6 @@ class InferenceEngine:
                 ("do_sample", "do_sample"),
                 ("num_beams", "num_beams"),
                 ("enable_text_splitting", "enable_text_splitting"),
-                ("gpt_cond_len", "gpt_cond_len"),
-                ("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
-                ("max_ref_len", "max_ref_len"),
-                ("sound_norm_refs", "sound_norm_refs"),
             ]
             for attr, kw in pairs:
                 val = getattr(xtts_params, attr)

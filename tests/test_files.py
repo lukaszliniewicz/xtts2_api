@@ -49,6 +49,23 @@ def test_files_crud_roundtrip():
     assert missing.status_code == 404
 
 
+def test_files_create_respects_name_override():
+    payload = b"RIFF" + (b"\x00" * 128)
+
+    created = client.post(
+        "/v1/files",
+        files={"file": ("upload_tmp.wav", payload, "audio/wav")},
+        data={"purpose": "user_data", "name": "speaker_alpha.wav"},
+    )
+    assert created.status_code == 200
+    file_obj = created.json()
+    assert file_obj["filename"] == "speaker_alpha.wav"
+
+    file_id = file_obj["id"]
+    deleted = client.delete(f"/v1/files/{file_id}")
+    assert deleted.status_code == 200
+
+
 def test_files_list_filters_and_cursor():
     purpose = f"voice_test_{uuid4().hex}"
     payload_a = b"A" * 256

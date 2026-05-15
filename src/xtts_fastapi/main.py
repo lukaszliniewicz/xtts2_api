@@ -170,8 +170,9 @@ async def list_models():
 async def create_file(
     file: UploadFile = File(..., description="File to upload"),
     purpose: str = Form(..., description="File purpose"),
+    name: str | None = Form(default=None, description="Optional filename override"),
 ):
-    filename = file.filename or "upload.bin"
+    filename = name or file.filename or "upload.bin"
     content = await file.read()
     return file_store.create(filename=filename, data=content, purpose=purpose)
 
