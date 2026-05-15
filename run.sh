@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="$PROJECT_DIR/bin"
 PIXI_EXE="$BIN_DIR/pixi"
 

@@ -37,7 +37,7 @@ def _find_pixi() -> str:
     path = PROJECT_DIR / "bin" / exe
     if not path.is_file():
         log.error("pixi not found at %s", path)
-        log.error("Run scripts/run.bat (Windows) or scripts/run.sh (Linux/macOS) first.")
+        log.error("Run run.bat (Windows) or run.sh (Linux/macOS) first.")
         sys.exit(1)
     return str(path)
 

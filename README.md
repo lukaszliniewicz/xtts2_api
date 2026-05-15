@@ -6,14 +6,14 @@ Environment managed by [pixi](https://pixi.sh).
 ## Quick Start
 
 ```bash
-# Windows
-scripts\run.bat
+# Windows (double-click run.bat, or run from terminal)
+run.bat
 
 # Linux / macOS
-bash scripts/run.sh
+bash run.sh
 
 # Force CPU (no GPU detection)
-scripts\run.bat --cpu
+run.bat --cpu
 ```
 
 The bootstrapper downloads pixi, creates a Python 3.12 environment, detects your

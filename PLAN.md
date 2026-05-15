@@ -104,7 +104,7 @@ xtts_fastapi/
 - Run `pixi run check-runtime`.
 - Print next commands (`run` script, API URL).
 
-### 6.2 scripts/run.sh and scripts/run.bat
+### 6.2 run.sh and run.bat
 - Ensure Pixi exists (call installer if missing).
 - Start server via `pixi run serve`.
 

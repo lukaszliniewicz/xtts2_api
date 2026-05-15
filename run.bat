@@ -1,8 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
 
-set "PROJECT_DIR=%~dp0.."
-set "BIN_DIR=%PROJECT_DIR%\bin"
+set "PROJECT_DIR=%~dp0"
+set "BIN_DIR=%PROJECT_DIR%bin"
 set "PIXI_EXE=%BIN_DIR%\pixi.exe"
 
 :: Download pixi if missing
