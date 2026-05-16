@@ -9,6 +9,9 @@ models/*/
 
 # voices
 voices/*/
+!voices/sample_male/
+voices/sample_male/*
+!voices/sample_male/sample_male_new.wav
 
 # files
 files/*/
