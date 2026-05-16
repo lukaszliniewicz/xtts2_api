@@ -156,6 +156,13 @@ def _apply_instruction_overrides(body: CreateSpeechRequest) -> CreateSpeechReque
     return CreateSpeechRequest.model_validate(payload)
 
 
+def _looks_like_wav(data: bytes) -> bool:
+    if len(data) < 12:
+        return False
+    riff_header = data[:4]
+    return riff_header in {b"RIFF", b"RIFX", b"RF64"} and data[8:12] == b"WAVE"
+
+
 @app.get("/health")
 async def health():
     return {
@@ -175,7 +182,7 @@ async def list_models():
     return ModelList(data=[m.to_openai() for m in models])
 
 
-@app.post("/v1/files", response_model=FileObject)
+@app.post("/v1/files", response_model=VoiceCreateResponse)
 async def create_file(
     file: UploadFile = File(..., description="File to upload"),
     purpose: str = Form(..., description="File purpose"),
@@ -183,7 +190,25 @@ async def create_file(
 ):
     filename = name or file.filename or "upload.bin"
     content = await file.read()
-    return file_store.create(filename=filename, data=content, purpose=purpose)
+
+    if not purpose:
+        raise APIError("purpose is required", param="purpose", code="missing_purpose")
+    if not content:
+        raise APIError("Uploaded file is empty", param="file", code="empty_file")
+    if not _looks_like_wav(content):
+        raise APIError(
+            "Only WAV uploads are supported",
+            param="file",
+            code="unsupported_file_type",
+            status=422,
+        )
+
+    raw_voice_id = Path(filename).stem
+    voice_id = normalize_voice_id(raw_voice_id)
+    if not voice_id:
+        voice_id = f"voice-{int(time.time())}"
+    normalized_sample_name = f"{voice_id}.wav"
+    return voice_store.create(voice_id, [(normalized_sample_name, content)], model=None, language=None)
 
 
 @app.get("/v1/files", response_model=FileListResponse)

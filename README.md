@@ -91,25 +91,28 @@ Upload a file (OpenAI-compatible multipart endpoint).
 | `purpose` | string | OpenAI-style file purpose (use `user_data` for voice references) |
 | `name` | string | Optional filename override (stored in response as `filename`) |
 
-File objects follow OpenAI naming and expose `filename` (there is no separate
-`name` field in the response).
+Only WAV uploads are accepted on this endpoint.
+
+- non-WAV uploads are rejected with `422 unsupported_file_type`
+- WAV bytes are normalized into a voice ID and stored as `voices/<voice_id>/<voice_id>.wav`
+- the endpoint returns a **voice** object (not a file object)
 
 ### `GET /v1/files`
 
 List uploaded files (OpenAI-compatible). Supports `limit`, `after`, `order`, and
-`purpose` query parameters.
+`purpose` query parameters. This is primarily useful for existing legacy file IDs.
 
 ### `GET /v1/files/{file_id}`
 
-Retrieve file metadata.
+Retrieve legacy file metadata.
 
 ### `GET /v1/files/{file_id}/content`
 
-Download file bytes.
+Download legacy file bytes.
 
 ### `DELETE /v1/files/{file_id}`
 
-Delete a file.
+Delete a legacy file.
 
 ### `GET /v1/voices`
 
@@ -142,7 +145,7 @@ Generate speech (OpenAI-compatible).
 |-------|------|---------|-------------|
 | `model` | string | required | Model ID (e.g. `tts_models/multilingual/multi-dataset/xtts_v2`) |
 | `input` | string | required | Text to synthesize (max 4096 chars) |
-| `voice` | string \| object | required | Voice ID, `{"id":"..."}`, or a file ID from `/v1/files` |
+| `voice` | string \| object | required | Voice ID or `{"id":"..."}` (legacy file IDs still resolve if present) |
 | `language` | string | `"en"` | Language code |
 | `response_format` | string | `"wav"` | `wav`, `mp3`, `opus`, `aac`, `flac`, `pcm` |
 | `speed` | float | `1.0` | Playback speed (0.25–4.0) |
@@ -155,37 +158,39 @@ Generate speech (OpenAI-compatible).
 
 ## Recommended SDK Flow
 
-For the highest OpenAI/LiteLLM compatibility, upload a voice sample with
-`/v1/files` and pass the returned `file_id` as `voice` in `/v1/audio/speech`.
+Use `/v1/voices` when your client can call it directly. `/v1/files` now accepts
+WAV only and returns a voice object (`id` is the voice ID to pass as `voice`).
 
 ### OpenAI Python SDK
 
 ```python
-from pathlib import Path
+import requests
 from openai import OpenAI
 
 client = OpenAI(api_key="sk-local", base_url="http://127.0.0.1:8020/v1")
 
-voice_file = client.files.create(
-    file=Path("voice.wav"),
-    purpose="user_data",
-)
+with open("voice.wav", "rb") as f:
+    upload = requests.post(
+        "http://127.0.0.1:8020/v1/files",
+        files={"file": ("voice.wav", f, "audio/wav")},
+        data={"purpose": "user_data"},
+        timeout=30,
+    )
+upload.raise_for_status()
+voice_id = upload.json()["id"]
 
 speech = client.audio.speech.create(
     model="tts_models/multilingual/multi-dataset/xtts_v2",
     input="Hello from XTTS.",
-    voice={"id": voice_file.id},
+    voice={"id": voice_id},
     response_format="wav",
 )
 speech.write_to_file("speech.wav")
 
-client.files.delete(voice_file.id)
+requests.delete(f"http://127.0.0.1:8020/v1/voices/{voice_id}", timeout=30)
 ```
 
 ### LiteLLM Python SDK
-
-LiteLLM currently validates `purpose` against a smaller set, so this example uses
-`assistants`.
 
 Some LiteLLM versions do not forward `extra_body` on `aspeech()` for
 OpenAI-compatible TTS. Use `instructions` with a JSON object as a workaround.
@@ -194,22 +199,24 @@ OpenAI-compatible TTS. Use `instructions` with a JSON object as a workaround.
 import asyncio
 import json
 import litellm
+import requests
 
 
 async def main():
     with open("voice.wav", "rb") as f:
-        voice_file = await litellm.acreate_file(
-            file=f,
-            purpose="assistants",
-            custom_llm_provider="openai",
-            api_base="http://127.0.0.1:8020/v1",
-            api_key="sk-local",
+        upload = requests.post(
+            "http://127.0.0.1:8020/v1/files",
+            files={"file": ("voice.wav", f, "audio/wav")},
+            data={"purpose": "assistants"},
+            timeout=30,
         )
+    upload.raise_for_status()
+    voice_id = upload.json()["id"]
 
     speech = await litellm.aspeech(
         model="openai/tts_models/multilingual/multi-dataset/xtts_v2",
         input="Hello from LiteLLM.",
-        voice=voice_file.id,
+        voice=voice_id,
         response_format="wav",
         speed=1.04,
         instructions=json.dumps(
@@ -227,13 +234,7 @@ async def main():
     )
     speech.write_to_file("speech.wav")
 
-    await litellm.afile_delete(
-        file_id=voice_file.id,
-        custom_llm_provider="openai",
-        api_base="http://127.0.0.1:8020/v1",
-        api_key="sk-local",
-    )
-
+    requests.delete(f"http://127.0.0.1:8020/v1/voices/{voice_id}", timeout=30)
 
 asyncio.run(main())
 ```
