@@ -20,6 +20,9 @@ run.bat --pixi-path "D:\\tools\\pixi.exe"
 bash run.sh --pixi-path /usr/local/bin/pixi
 ```
 
+A bundled reference voice sample is included at `smoke_ref_base.wav` for quick
+voice-cloning smoke tests.
+
 The bootstrapper downloads pixi, creates a Python 3.12 environment, detects your
 hardware (NVIDIA CUDA, AMD ROCm, or CPU), installs the appropriate PyTorch wheel
 and coqui-tts, preloads the default model into `models/XTTS_2.0.2/` by default
@@ -57,13 +60,17 @@ are untested. Pull requests welcome.
 bin\pixi install
 
 # 2. Install PyTorch for your backend
-bin\pixi run pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu126
+bin\pixi run pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 
 # 3. Install coqui-tts + pin transformers
 bin\pixi run pip install coqui-tts
 bin\pixi run pip install "transformers>=4,<5"
 
 # 4. (CUDA only) Install DeepSpeed
+# Windows (prebuilt wheel for torch 2.8 + cu128)
+bin\pixi run pip install https://huggingface.co/datasets/siraxe/PrecompiledWheels_Torch-2.8-cu128-cp312/resolve/main/deepspeed-0.16.8+9c9d32c2-cp312-cp312-win_amd64.whl
+
+# Linux / macOS
 bin\pixi run pip install deepspeed==0.16.5
 
 # 5. Start
@@ -374,9 +381,10 @@ Custom models can be placed in `models/<model_id>/` with `config.json`,
 
 ## DeepSpeed
 
-DeepSpeed 0.16.5 is automatically installed for CUDA backends. This project pins
-PyTorch 2.6.x to match the available Windows DeepSpeed wheel build. NVIDIA
-driver required; CUDA toolkit is not needed at runtime.
+DeepSpeed is automatically installed for CUDA backends. On Windows, the launcher
+uses a prebuilt wheel compatible with Python 3.12, Torch 2.8, and CUDA 12.8.
+On Linux/macOS, it installs `deepspeed==0.16.5`. NVIDIA driver required; CUDA
+toolkit is not needed at runtime.
 
 The server keeps DeepSpeed enabled by default on CUDA and automatically retries
 checkpoint loading without DeepSpeed if initialization fails.

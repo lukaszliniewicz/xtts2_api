@@ -25,9 +25,14 @@ log = logging.getLogger("run")
 PROJECT_DIR = Path(__file__).parent.resolve()
 SERVER_MODULE = "src.xtts_fastapi.main:app"
 
-TORCH_VERSION = "2.6.0"
-TORCHVISION_VERSION = "0.21.0"
-TORCHAUDIO_VERSION = "2.6.0"
+TORCH_VERSION = "2.8.0"
+TORCHVISION_VERSION = "0.23.0"
+TORCHAUDIO_VERSION = "2.8.0"
+CUDA_WHEEL_INDEX = "https://download.pytorch.org/whl/cu128"
+DEEPSPEED_WHEEL_URL = (
+    "https://huggingface.co/datasets/siraxe/PrecompiledWheels_Torch-2.8-cu128-cp312/resolve/main/"
+    "deepspeed-0.16.8+9c9d32c2-cp312-cp312-win_amd64.whl"
+)
 PIXI_PATH_OVERRIDE: Path | None = None
 
 DEFAULT_MODEL_ID = "tts_models/multilingual/multi-dataset/xtts_v2"
@@ -408,7 +413,7 @@ def ensure_torch(backend: str) -> bool:
         idx = "https://download.pytorch.org/whl/cpu"
     elif backend == "cuda":
         pkgs = f"torch=={TORCH_VERSION} torchvision=={TORCHVISION_VERSION} torchaudio=={TORCHAUDIO_VERSION}"
-        idx = "https://download.pytorch.org/whl/cu126"
+        idx = CUDA_WHEEL_INDEX
     elif backend == "rocm":
         pkgs = f"torch=={TORCH_VERSION}"
         if platform.system() != "Windows":
@@ -458,6 +463,9 @@ def ensure_deepspeed(backend: str) -> None:
     if _check_package("deepspeed"):
         return
     log.info("Installing deepspeed...")
+    if platform.system() == "Windows":
+        _pip_install(DEEPSPEED_WHEEL_URL)
+        return
     _pip_install("deepspeed==0.16.5")
 
 
