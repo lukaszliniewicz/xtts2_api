@@ -470,6 +470,7 @@ def start_server() -> None:
         SERVER_MODULE,
         "--host", "0.0.0.0",
         "--port", "8020",
+        "--no-access-log",
     ]
     log.info("Starting XTTS FastAPI server...\n")
     sys.stdout.flush()

@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     voices_dir: Path = Path("voices")
     files_dir: Path = Path("files")
     logs_dir: Path = Path("logs")
+    app_log_file: str = "app.log"
+    access_log_file: str = "access.log"
+    error_log_file: str = "errors.log"
+    log_level: str = "INFO"
+    log_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
+    log_backup_count: int = Field(default=5, ge=1)
+    request_id_header: str = "X-Request-ID"
     coqui_tos_agreed: bool = True
     device: str = "auto"
     use_deepspeed: bool = True

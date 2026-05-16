@@ -25,7 +25,15 @@ hardware (NVIDIA CUDA, AMD ROCm, or CPU), installs the appropriate PyTorch wheel
 and coqui-tts, preloads the default model into `models/XTTS_2.0.2/` by default
 (unless `XTTS_COQUI_TOS_AGREED=false`), then starts the server on `http://0.0.0.0:8020`.
 
-API errors and unhandled exceptions are written to `logs/errors.log`.
+Structured rotating logs are written under `logs/`:
+
+- `logs/app.log`: general application and uvicorn server events
+- `logs/access.log`: per-request access entries with method/path/status/timing
+- `logs/errors.log`: unhandled exceptions and server-side errors
+
+Each request gets an `X-Request-ID` response header. If the client sends
+`X-Request-ID`, the server reuses it (after sanitization) so request-scoped logs
+can be correlated across files.
 
 ## Platform & Backend Compatibility
 
@@ -59,7 +67,7 @@ bin\pixi run pip install "transformers>=4,<5"
 bin\pixi run pip install --no-deps deepspeed==0.16.5
 
 # 5. Start
-bin\pixi run python -m uvicorn src.xtts_fastapi.main:app --host 0.0.0.0 --port 8020
+bin\pixi run python -m uvicorn src.xtts_fastapi.main:app --host 0.0.0.0 --port 8020 --no-access-log
 ```
 
 ## API Reference

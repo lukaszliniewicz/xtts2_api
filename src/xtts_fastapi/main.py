@@ -6,10 +6,17 @@ import logging
 import time
 from pathlib import Path
 from typing import AsyncGenerator
+from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .api_models import (
     CreateSpeechRequest,
@@ -25,14 +32,32 @@ from .audio import convert_wav_bytes, SUPPORTED_FORMATS
 from .engine import engine
 from .errors import APIError
 from .file_store import file_store
+from .logging_setup import (
+    ACCESS_LOGGER_NAME,
+    APP_LOGGER_NAME,
+    ERROR_LOGGER_NAME,
+    configure_file_logging,
+    reset_request_id,
+    set_request_id,
+)
 from .registry import registry
 from .settings import settings
 from .voices import normalize_voice_id, voice_store
 
-logger = logging.getLogger(__name__)
+configure_file_logging(
+    logs_dir=settings.logs_dir,
+    level=settings.log_level,
+    max_bytes=settings.log_max_bytes,
+    backup_count=settings.log_backup_count,
+    app_log_file=settings.app_log_file,
+    access_log_file=settings.access_log_file,
+    error_log_file=settings.error_log_file,
+)
+
+app_logger = logging.getLogger(APP_LOGGER_NAME)
+access_logger = logging.getLogger(ACCESS_LOGGER_NAME)
+error_logger = logging.getLogger(ERROR_LOGGER_NAME)
 INSTRUCTION_XTTS_FIELDS = set(XTTSParams.model_fields.keys())
-ERROR_LOGGER_NAME = "xtts_fastapi.errors"
-ERROR_LOG_FILE = "errors.log"
 
 app = FastAPI(
     title="XTTS FastAPI Server",
@@ -42,52 +67,107 @@ app = FastAPI(
 )
 
 
-def _configure_error_file_logger() -> logging.Logger:
-    error_logger = logging.getLogger(ERROR_LOGGER_NAME)
-    if error_logger.handlers:
-        return error_logger
+def _sanitize_request_id(raw_request_id: str) -> str:
+    allowed = {"-", "_", "."}
+    sanitized = "".join(ch for ch in raw_request_id.strip() if ch.isalnum() or ch in allowed)
+    return sanitized[:128]
 
-    log_path = Path(settings.logs_dir) / ERROR_LOG_FILE
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    header_name = settings.request_id_header or "X-Request-ID"
+    incoming_request_id = request.headers.get(header_name, "")
+    request_id = _sanitize_request_id(incoming_request_id) or uuid4().hex
+
+    token = set_request_id(request_id)
+    request.state.request_id = request_id
+    started = time.perf_counter()
+    response: Response | None = None
+
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(log_path, encoding="utf-8")
-    except OSError:
-        logger.exception("Failed to create error log file: %s", log_path)
-        return logger
+        response = await call_next(request)
+        return response
+    finally:
+        duration_ms = (time.perf_counter() - started) * 1000.0
+        status = response.status_code if response is not None else 500
+        client_host = request.client.host if request.client is not None else "-"
+        content_length = "-"
+        if response is not None:
+            content_length = response.headers.get("content-length", "-")
+            response.headers.setdefault(header_name, request_id)
 
-    handler.setLevel(logging.ERROR)
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
-    )
-    error_logger.setLevel(logging.ERROR)
-    error_logger.propagate = False
-    error_logger.addHandler(handler)
-    return error_logger
-
-
-error_logger = _configure_error_file_logger()
+        access_logger.info(
+            "request_complete",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": status,
+                "duration_ms": f"{duration_ms:.2f}",
+                "client": client_host,
+                "content_length": content_length,
+            },
+        )
+        reset_request_id(token)
 
 
 @app.exception_handler(APIError)
 async def api_error_handler(request: Request, exc: APIError):
-    error_logger.error(
-        "APIError method=%s path=%s status=%s code=%s param=%s message=%s",
-        request.method,
-        request.url.path,
-        exc.status,
-        exc.code,
-        exc.param,
-        exc.message,
-    )
+    record = {
+        "method": request.method,
+        "path": request.url.path,
+        "status": exc.status,
+        "code": exc.code or "invalid_request_error",
+        "param": exc.param,
+        "detail": exc.message,
+    }
+
+    if exc.status >= 500:
+        error_logger.error("api_error", extra=record)
+    else:
+        app_logger.info("api_error", extra=record)
+
     return exc.to_response()
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    app_logger.info(
+        "request_validation_error",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status": 422,
+            "detail": exc.errors(),
+        },
+    )
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException):
+    details = {
+        "method": request.method,
+        "path": request.url.path,
+        "status": exc.status_code,
+        "detail": exc.detail,
+    }
+    if exc.status_code >= 500:
+        error_logger.error("http_exception", extra=details)
+    else:
+        app_logger.info("http_exception", extra=details)
+    return await http_exception_handler(request, exc)
 
 
 @app.exception_handler(Exception)
 async def unhandled_error_handler(request: Request, exc: Exception):
     error_logger.error(
-        "Unhandled exception method=%s path=%s",
-        request.method,
-        request.url.path,
+        "unhandled_exception",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status": 500,
+            "detail": str(exc),
+        },
         exc_info=(type(exc), exc, exc.__traceback__),
     )
     return JSONResponse(
