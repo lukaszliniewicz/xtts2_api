@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     models_dir: Path = Path("models")
     voices_dir: Path = Path("voices")
     files_dir: Path = Path("files")
-    coqui_tos_agreed: bool = False
+    coqui_tos_agreed: bool = True
     device: str = "auto"
     use_deepspeed: bool = True
     default_language: str = "en"

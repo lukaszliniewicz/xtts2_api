@@ -120,8 +120,12 @@ def is_xtts_model(model_id: str) -> bool:
     return "xtts" in model_id.lower()
 
 
-def _has_model_config(path: Path) -> bool:
-    return path.is_dir() and (path / "config.json").is_file()
+def _missing_default_model_files(path: Path) -> list[str]:
+    return [name for name in DEFAULT_MODEL_REQUIRED_FILES if not (path / name).is_file()]
+
+
+def _has_complete_default_model(path: Path) -> bool:
+    return path.is_dir() and not _missing_default_model_files(path)
 
 
 def _default_model_local_path() -> Path:
@@ -185,7 +189,7 @@ def _find_cached_model_from_roots(model_name: str, roots: list[Path], label: str
 
         for folder_name in folder_names:
             candidate = root / folder_name
-            if _has_model_config(candidate):
+            if _has_complete_default_model(candidate):
                 logger.info("Found default model in %s cache: %s", label, candidate)
                 return candidate
 
@@ -237,6 +241,43 @@ def _hf_repo_markers(model_name: str) -> set[str]:
     return {item for item in markers if item}
 
 
+def _find_default_model_in_tree(root: Path, model_name: str) -> Path | None:
+    if not root.is_dir():
+        return None
+
+    markers = _hf_repo_markers(model_name)
+    best_path: Path | None = None
+    best_score: tuple[int, float] | None = None
+
+    try:
+        weight_files = list(root.rglob("model.pth"))
+    except OSError:
+        return None
+
+    for weight_file in weight_files:
+        candidate = weight_file.parent
+        if not _has_complete_default_model(candidate):
+            continue
+
+        candidate_text = str(candidate).lower()
+        marker_hits = sum(1 for marker in markers if marker in candidate_text)
+
+        try:
+            modified = candidate.stat().st_mtime
+        except OSError:
+            modified = 0.0
+
+        score = (marker_hits, modified)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_path = candidate
+
+    if best_path is not None:
+        logger.info("Found complete default model in models tree: %s", best_path)
+
+    return best_path
+
+
 def _find_hf_hub_snapshot(model_name: str) -> Path | None:
     markers = _hf_repo_markers(model_name)
 
@@ -268,7 +309,7 @@ def _find_hf_hub_snapshot(model_name: str) -> Path | None:
                 continue
 
             for snapshot in snapshots:
-                if _has_model_config(snapshot):
+                if _has_complete_default_model(snapshot):
                     logger.info("Found default model in HF hub cache: %s", snapshot)
                     return snapshot
 
@@ -322,7 +363,7 @@ def _download_default_model_from_hf(local: Path) -> bool:
             allow_patterns=[*DEFAULT_MODEL_REQUIRED_FILES, "hash.md5"],
         )
 
-        missing = [name for name in DEFAULT_MODEL_REQUIRED_FILES if not (temp_dir / name).is_file()]
+        missing = _missing_default_model_files(temp_dir)
         if missing:
             raise RuntimeError(f"Missing required model files: {', '.join(missing)}")
 
@@ -341,19 +382,26 @@ def _find_cached_default() -> Path | None:
 
     # Preferred local model path
     local = _default_model_local_path()
-    if _has_model_config(local):
+    if local.is_dir() and not _has_complete_default_model(local):
+        missing = _missing_default_model_files(local)
+        logger.warning(
+            "Default model directory is incomplete (%s), missing: %s",
+            local,
+            ", ".join(missing),
+        )
+    if _has_complete_default_model(local):
         logger.info("Found default model in local models/ directory")
         return local
 
     # Legacy local path from older releases
     legacy_local = settings.models_dir / model_name
-    if _has_model_config(legacy_local):
+    if _has_complete_default_model(legacy_local):
         logger.info("Found default model in legacy local path")
         return legacy_local
 
     for legacy_folder in LEGACY_DEFAULT_LOCAL_DIRS:
         candidate = settings.models_dir / legacy_folder
-        if _has_model_config(candidate):
+        if _has_complete_default_model(candidate):
             logger.info("Found default model in legacy local folder: %s", candidate)
             return candidate
 
@@ -377,6 +425,10 @@ def _find_cached_default() -> Path | None:
     hf_snapshot = _find_hf_hub_snapshot(model_name)
     if hf_snapshot is not None:
         return hf_snapshot
+
+    tree_candidate = _find_default_model_in_tree(settings.models_dir, model_name)
+    if tree_candidate is not None:
+        return tree_candidate
 
     return None
 
@@ -420,30 +472,30 @@ def _download_default_model_to_local(local: Path) -> None:
 
 def _ensure_default_model_local() -> Path:
     local = _default_model_local_path()
-    if _has_model_config(local):
+    if _has_complete_default_model(local):
         return local
 
     cached = _find_cached_default()
-    if cached is not None and _has_model_config(cached):
+    if cached is not None and _has_complete_default_model(cached):
         logger.info("Copying default model from cache to %s", local)
         try:
             _copy_model_dir(cached, local)
         except Exception as exc:
             logger.warning("Failed to copy cached default model to %s: %s", local, exc)
         else:
-            if _has_model_config(local):
+            if _has_complete_default_model(local):
                 return local
 
     _download_default_model_to_local(local)
 
-    if _has_model_config(local):
+    if _has_complete_default_model(local):
         return local
 
     cached = _find_cached_default()
-    if cached is not None and _has_model_config(cached):
+    if cached is not None and _has_complete_default_model(cached):
         logger.info("Copying downloaded default model into %s", local)
         _copy_model_dir(cached, local)
-        if _has_model_config(local):
+        if _has_complete_default_model(local):
             return local
 
     raise RuntimeError(

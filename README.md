@@ -22,8 +22,8 @@ bash run.sh --pixi-path /usr/local/bin/pixi
 
 The bootstrapper downloads pixi, creates a Python 3.12 environment, detects your
 hardware (NVIDIA CUDA, AMD ROCm, or CPU), installs the appropriate PyTorch wheel
-and coqui-tts, preloads the default model into `models/XTTS_2.0.2/` (when
-`XTTS_COQUI_TOS_AGREED=true`), then starts the server on `http://0.0.0.0:8020`.
+and coqui-tts, preloads the default model into `models/XTTS_2.0.2/` by default
+(unless `XTTS_COQUI_TOS_AGREED=false`), then starts the server on `http://0.0.0.0:8020`.
 
 ## Platform & Backend Compatibility
 
@@ -306,7 +306,7 @@ XTTS_REPETITION_PENALTY=5.0
 | `XTTS_PORT` | `8020` | Port |
 | `XTTS_DEVICE` | `auto` | `auto`, `cuda`, `cpu` |
 | `XTTS_USE_DEEPSPEED` | `true` | Enable DeepSpeed (CUDA only) |
-| `XTTS_COQUI_TOS_AGREED` | `false` | Accept Coqui terms of service |
+| `XTTS_COQUI_TOS_AGREED` | `true` | Accept Coqui terms of service (set `false` to opt out) |
 | `XTTS_DEFAULT_LANGUAGE` | `en` | Default language |
 | `XTTS_DEFAULT_MODEL` | `tts_models/multilingual/multi-dataset/xtts_v2` | Default model |
 | `XTTS_DEFAULT_MODEL_LOCAL_DIR` | `XTTS_2.0.2` | Local folder name under `models/` for the default model |
@@ -324,6 +324,9 @@ XTTS_REPETITION_PENALTY=5.0
 | `XTTS_MIN_REF_AUDIO_SECONDS` | `0.5` | Minimum reference clip duration |
 | `XTTS_STREAM_CHUNK_SIZE` | `20` | |
 | `XTTS_OVERLAP_WAV_LEN` | `1024` | |
+
+When `XTTS_COQUI_TOS_AGREED=true` (default), the launcher and server set
+`COQUI_TOS_AGREED=1` automatically before model download/load.
 
 ## Output Formats
 
@@ -345,12 +348,15 @@ Two streaming modes via `stream_format`:
 ## Model Cache
 
 The launcher pre-downloads the default model (~1.6 GB) into
-`models/XTTS_2.0.2/` during install/start when `XTTS_COQUI_TOS_AGREED=true`.
+`models/XTTS_2.0.2/` during install/start by default.
 It prefers direct HuggingFace download into a temporary project folder, then
 moves the result into `models/XTTS_2.0.2/` to avoid duplicate disk usage.
 If direct download is skipped or fails, it falls back to coqui-tts download and
 the server can still download on first inference.
 Existing `models/v2.0.2/` is reused and copied forward automatically.
+On startup, the launcher validates required model files (`config.json`,
+`model.pth`, `speakers_xtts.pth`, `vocab.json`) and scans `models/` recursively
+for a complete bundle before attempting a new download.
 
 Custom models can be placed in `models/<model_id>/` with `config.json`,
 `model.pth`, `speakers_xtts.pth`, and `vocab.json`.

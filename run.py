@@ -89,11 +89,82 @@ def _default_model_id() -> str:
     return os.environ.get("XTTS_DEFAULT_MODEL") or _read_dotenv_var("XTTS_DEFAULT_MODEL") or DEFAULT_MODEL_ID
 
 
+def _missing_required_model_files(model_dir: Path) -> list[str]:
+    return [name for name in DEFAULT_MODEL_REQUIRED_FILES if not (model_dir / name).is_file()]
+
+
+def _has_complete_model_bundle(model_dir: Path) -> bool:
+    return model_dir.is_dir() and not _missing_required_model_files(model_dir)
+
+
 def _has_local_default_model() -> bool:
     model_dir = _default_model_path()
     if not model_dir.is_dir():
         return False
-    return all((model_dir / name).is_file() for name in DEFAULT_MODEL_REQUIRED_FILES)
+
+    missing = _missing_required_model_files(model_dir)
+    if missing:
+        log.warning(
+            "Default model directory is incomplete (%s), missing: %s",
+            model_dir,
+            ", ".join(missing),
+        )
+        return False
+
+    return True
+
+
+def _model_id_markers(model_id: str) -> set[str]:
+    markers: set[str] = set()
+    lowered = model_id.lower().strip()
+    if not lowered:
+        return markers
+
+    tail = lowered.split("/")[-1]
+    markers.add(tail)
+    markers.add(tail.replace("_", "-"))
+
+    if "xtts" in lowered:
+        markers.add("xtts")
+
+    return {item for item in markers if item}
+
+
+def _find_model_bundle_in_tree(root: Path, model_id: str) -> Path | None:
+    if not root.is_dir():
+        return None
+
+    markers = _model_id_markers(model_id)
+    best_path: Path | None = None
+    best_score: tuple[int, float] | None = None
+
+    try:
+        weight_files = list(root.rglob("model.pth"))
+    except OSError:
+        return None
+
+    for weight_file in weight_files:
+        candidate = weight_file.parent
+        if not _has_complete_model_bundle(candidate):
+            continue
+
+        candidate_text = str(candidate).lower()
+        marker_hits = sum(1 for marker in markers if marker in candidate_text)
+
+        try:
+            modified = candidate.stat().st_mtime
+        except OSError:
+            modified = 0.0
+
+        score = (marker_hits, modified)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_path = candidate
+
+    if best_path is not None:
+        log.info("Found complete default model in models tree: %s", best_path)
+
+    return best_path
 
 
 def _find_local_legacy_model() -> Path | None:
@@ -101,7 +172,7 @@ def _find_local_legacy_model() -> Path | None:
         candidate = PROJECT_DIR / "models" / folder
         if candidate == _default_model_path():
             continue
-        if candidate.is_dir() and all((candidate / name).is_file() for name in DEFAULT_MODEL_REQUIRED_FILES):
+        if _has_complete_model_bundle(candidate):
             return candidate
     return None
 
@@ -136,7 +207,10 @@ def _is_coqui_tos_agreed() -> bool:
         _read_dotenv_var("COQUI_TOS_AGREED"),
         _read_dotenv_var("XTTS_COQUI_TOS_AGREED"),
     ]
-    return any(_bool_value(v) for v in checks)
+    present = [value for value in checks if value is not None]
+    if not present:
+        return True
+    return any(_bool_value(v) for v in present)
 
 
 def _resolve_default_hf_source(model_id: str) -> tuple[str, str] | None:
@@ -186,7 +260,7 @@ def _download_default_model_from_hf(model_dir: Path) -> bool:
             local_dir=str(temp_dir),
             allow_patterns=[*DEFAULT_MODEL_REQUIRED_FILES, "hash.md5"],
         )
-        missing = [name for name in DEFAULT_MODEL_REQUIRED_FILES if not (temp_dir / name).is_file()]
+        missing = _missing_required_model_files(temp_dir)
         if missing:
             raise RuntimeError(f"Missing required model files: {', '.join(missing)}")
 
@@ -215,9 +289,17 @@ def ensure_default_model() -> bool:
         if _has_local_default_model():
             return True
 
+    discovered = _find_model_bundle_in_tree(PROJECT_DIR / "models", _default_model_id())
+    if discovered is not None:
+        if discovered.resolve() != model_dir.resolve():
+            log.info("Moving discovered model bundle from %s to %s", discovered, model_dir)
+            _move_model_dir(discovered, model_dir)
+        if _has_local_default_model():
+            return True
+
     if not _is_coqui_tos_agreed():
         log.info(
-            "Skipping default model predownload; set XTTS_COQUI_TOS_AGREED=true to download during install."
+            "Skipping default model predownload; set XTTS_COQUI_TOS_AGREED=true to re-enable downloads."
         )
         return False
 
