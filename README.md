@@ -25,6 +25,8 @@ hardware (NVIDIA CUDA, AMD ROCm, or CPU), installs the appropriate PyTorch wheel
 and coqui-tts, preloads the default model into `models/XTTS_2.0.2/` by default
 (unless `XTTS_COQUI_TOS_AGREED=false`), then starts the server on `http://0.0.0.0:8020`.
 
+API errors and unhandled exceptions are written to `logs/errors.log`.
+
 ## Platform & Backend Compatibility
 
 | Platform | Backend | Status |

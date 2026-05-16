@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, File, Form, Query, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 
@@ -31,6 +31,8 @@ from .voices import normalize_voice_id, voice_store
 
 logger = logging.getLogger(__name__)
 INSTRUCTION_XTTS_FIELDS = set(XTTSParams.model_fields.keys())
+ERROR_LOGGER_NAME = "xtts_fastapi.errors"
+ERROR_LOG_FILE = "errors.log"
 
 app = FastAPI(
     title="XTTS FastAPI Server",
@@ -40,9 +42,65 @@ app = FastAPI(
 )
 
 
+def _configure_error_file_logger() -> logging.Logger:
+    error_logger = logging.getLogger(ERROR_LOGGER_NAME)
+    if error_logger.handlers:
+        return error_logger
+
+    log_path = Path(settings.logs_dir) / ERROR_LOG_FILE
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+    except OSError:
+        logger.exception("Failed to create error log file: %s", log_path)
+        return logger
+
+    handler.setLevel(logging.ERROR)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    error_logger.setLevel(logging.ERROR)
+    error_logger.propagate = False
+    error_logger.addHandler(handler)
+    return error_logger
+
+
+error_logger = _configure_error_file_logger()
+
+
 @app.exception_handler(APIError)
-async def api_error_handler(request, exc: APIError):
+async def api_error_handler(request: Request, exc: APIError):
+    error_logger.error(
+        "APIError method=%s path=%s status=%s code=%s param=%s message=%s",
+        request.method,
+        request.url.path,
+        exc.status,
+        exc.code,
+        exc.param,
+        exc.message,
+    )
     return exc.to_response()
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception):
+    error_logger.error(
+        "Unhandled exception method=%s path=%s",
+        request.method,
+        request.url.path,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return JSONResponse(
+        {
+            "error": {
+                "message": "Internal server error",
+                "type": "server_error",
+                "param": None,
+                "code": "internal_server_error",
+            }
+        },
+        status_code=500,
+    )
 
 
 @app.on_event("startup")

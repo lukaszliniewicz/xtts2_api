@@ -52,6 +52,14 @@ def test_xtts_params_accepts_legacy_max_ref_len_alias():
 def test_xtts_wrapper_cuda_error_detection():
     assert XTTSWrapper._is_cuda_runtime_error(RuntimeError("CUDA error: unknown error"))
     assert XTTSWrapper._is_cuda_runtime_error(RuntimeError("cuDNN_STATUS_EXECUTION_FAILED"))
+    assert XTTSWrapper._is_cuda_runtime_error(RuntimeError("nvrtc: error: failed to load builtins"))
+    assert XTTSWrapper._is_cuda_runtime_error(
+        RuntimeError(
+            "RuntimeError:\n#ifdef __HIPCC__\n"
+            "#define CUDA_OR_ROCM_NUM_THREADS 256\n"
+            "extern \"C\" __global__ void abs_kernel_vectorized4_kernel()"
+        )
+    )
     assert not XTTSWrapper._is_cuda_runtime_error(RuntimeError("plain value error"))
 
 

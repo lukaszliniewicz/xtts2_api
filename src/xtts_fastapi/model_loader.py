@@ -114,6 +114,27 @@ DEFAULT_MODEL_REQUIRED_FILES = (
     "speakers_xtts.pth",
     "vocab.json",
 )
+CUDA_RUNTIME_ERROR_MARKERS = (
+    "cuda error",
+    "cuda runtime error",
+    "cuda-capable device(s) is/are busy or unavailable",
+    "device-side assert",
+    "illegal memory access",
+    "no kernel image is available for execution on the device",
+    "cudnn",
+    "cublas",
+    "curand",
+    "cusolver",
+    "cusparse",
+    "nvrtc",
+    "jiterator",
+    "triton",
+)
+CUDA_KERNEL_DUMP_MARKERS = (
+    "#ifdef __hipcc__",
+    "cuda_or_rocm_num_threads",
+    "__global__",
+)
 
 
 def is_xtts_model(model_id: str) -> bool:
@@ -738,14 +759,10 @@ class XTTSWrapper:
     @staticmethod
     def _is_cuda_runtime_error(exc: RuntimeError) -> bool:
         msg = str(exc).lower()
-        markers = [
-            "cuda error",
-            "device-side assert",
-            "cublas",
-            "cudnn",
-            "illegal memory access",
-        ]
-        return any(marker in msg for marker in markers)
+        if any(marker in msg for marker in CUDA_RUNTIME_ERROR_MARKERS):
+            return True
+
+        return all(marker in msg for marker in CUDA_KERNEL_DUMP_MARKERS)
 
     def _to_device(self, value):
         if torch.is_tensor(value):
