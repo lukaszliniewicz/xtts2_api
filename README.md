@@ -122,8 +122,11 @@ Upload voice samples. Accepts multipart form data.
 | Field | Type | Description |
 |-------|------|-------------|
 | `files` | File[] | One or more WAV audio samples |
-| `voice_id` | string | Optional custom ID (defaults to first filename) |
+| `voice_id` | string | Optional custom ID (normalized to lowercase slug) |
 | `language` | string | Optional language code |
+
+If `voice_id` is omitted, the server derives it from the first uploaded filename
+stem and normalizes it (lowercase, punctuation/spaces collapsed to `-`).
 
 ### `DELETE /v1/voices/{voice_id}`
 
@@ -343,9 +346,10 @@ Two streaming modes via `stream_format`:
 
 The launcher pre-downloads the default model (~1.6 GB) into
 `models/XTTS_2.0.2/` during install/start when `XTTS_COQUI_TOS_AGREED=true`.
-If a cached copy already exists in the coqui-tts/HF cache, it is copied into
-`models/` instead of downloading again. If pre-download is skipped or fails,
-the server falls back to downloading on first inference.
+It prefers direct HuggingFace download into a temporary project folder, then
+moves the result into `models/XTTS_2.0.2/` to avoid duplicate disk usage.
+If direct download is skipped or fails, it falls back to coqui-tts download and
+the server can still download on first inference.
 Existing `models/v2.0.2/` is reused and copied forward automatically.
 
 Custom models can be placed in `models/<model_id>/` with `config.json`,

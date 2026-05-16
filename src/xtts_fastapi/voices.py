@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import time
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,6 +15,17 @@ if TYPE_CHECKING:
     from .api_models import Voice, VoiceCreateResponse, VoiceFile
 
 logger = logging.getLogger(__name__)
+
+VOICE_ID_INVALID_CHARS = re.compile(r"[^a-z0-9_-]+")
+VOICE_ID_MULTI_HYPHEN = re.compile(r"-{2,}")
+
+
+def normalize_voice_id(value: str) -> str:
+    ascii_value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    normalized = ascii_value.strip().lower()
+    normalized = VOICE_ID_INVALID_CHARS.sub("-", normalized)
+    normalized = VOICE_ID_MULTI_HYPHEN.sub("-", normalized)
+    return normalized.strip("-_")
 
 
 class VoiceStore:

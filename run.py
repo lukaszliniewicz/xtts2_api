@@ -8,10 +8,12 @@ import importlib.util
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 logging.basicConfig(
     level=logging.INFO,
@@ -137,6 +139,67 @@ def _is_coqui_tos_agreed() -> bool:
     return any(_bool_value(v) for v in checks)
 
 
+def _resolve_default_hf_source(model_id: str) -> tuple[str, str] | None:
+    normalized = model_id.strip().lower()
+    if not normalized or "xtts" not in normalized:
+        return None
+
+    revision = "main"
+    match = re.search(r"v\d+\.\d+\.\d+", normalized)
+    if match is not None:
+        revision = match.group(0)
+
+    return "coqui/XTTS-v2", revision
+
+
+def _move_model_dir(src: Path, dst: Path) -> None:
+    if src.resolve() == dst.resolve():
+        return
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.move(str(src), str(dst))
+
+
+def _download_default_model_from_hf(model_dir: Path) -> bool:
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        return False
+
+    source = _resolve_default_hf_source(_default_model_id())
+    if source is None:
+        return False
+
+    repo_id, revision = source
+    temp_dir = PROJECT_DIR / "models" / ".downloads" / f"{model_dir.name}-{uuid4().hex}"
+    temp_dir.parent.mkdir(parents=True, exist_ok=True)
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+
+    try:
+        log.info("Downloading default model directly from HuggingFace: %s (%s)", repo_id, revision)
+        snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            local_dir=str(temp_dir),
+            allow_patterns=[*DEFAULT_MODEL_REQUIRED_FILES, "hash.md5"],
+        )
+        missing = [name for name in DEFAULT_MODEL_REQUIRED_FILES if not (temp_dir / name).is_file()]
+        if missing:
+            raise RuntimeError(f"Missing required model files: {', '.join(missing)}")
+
+        _move_model_dir(temp_dir, model_dir)
+        return True
+    except Exception as exc:
+        first_line = str(exc).splitlines()[0] if str(exc) else repr(exc)
+        log.warning("Direct HuggingFace model download failed: %s", first_line)
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return False
+
+
 def ensure_default_model() -> bool:
     if _has_local_default_model():
         return True
@@ -152,10 +215,6 @@ def ensure_default_model() -> bool:
         if _has_local_default_model():
             return True
 
-    if not _check_package("TTS"):
-        log.warning("coqui-tts is not installed; skipping default model predownload")
-        return False
-
     if not _is_coqui_tos_agreed():
         log.info(
             "Skipping default model predownload; set XTTS_COQUI_TOS_AGREED=true to download during install."
@@ -164,6 +223,15 @@ def ensure_default_model() -> bool:
 
     model_dir.parent.mkdir(parents=True, exist_ok=True)
     os.environ["COQUI_TOS_AGREED"] = "1"
+
+    if _download_default_model_from_hf(model_dir):
+        if _has_local_default_model():
+            log.info("Default model ready at %s", model_dir)
+            return True
+
+    if not _check_package("TTS"):
+        log.warning("coqui-tts is not installed; skipping default model predownload")
+        return False
 
     try:
         from TTS.utils.manage import ModelManager
@@ -174,9 +242,7 @@ def ensure_default_model() -> bool:
         source_dir = downloaded_path if downloaded_path.is_dir() else downloaded_path.parent
 
         if source_dir.resolve() != model_dir.resolve():
-            if model_dir.exists():
-                shutil.rmtree(model_dir)
-            shutil.copytree(source_dir, model_dir)
+            _move_model_dir(source_dir, model_dir)
 
         if _has_local_default_model():
             log.info("Default model ready at %s", model_dir)

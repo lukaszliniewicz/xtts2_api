@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import time
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, File, Form, Query, UploadFile
@@ -26,7 +27,7 @@ from .errors import APIError
 from .file_store import file_store
 from .registry import registry
 from .settings import settings
-from .voices import voice_store
+from .voices import normalize_voice_id, voice_store
 
 logger = logging.getLogger(__name__)
 INSTRUCTION_XTTS_FIELDS = set(XTTSParams.model_fields.keys())
@@ -235,19 +236,20 @@ async def list_voices():
 @app.post("/v1/voices", response_model=VoiceCreateResponse)
 async def create_voice(
     files: list[UploadFile] = File(..., description="Audio sample files"),
-    voice_id: str = Form(None, description="Custom voice ID"),
+    voice_id: str = Form(None, description="Custom voice ID (normalized)"),
     model: str = Form(None, description="Associated model ID"),
     language: str = Form(None, description="Language code"),
 ):
     if not files:
         raise APIError("At least one audio file is required", param="files", code="missing_files")
 
-    if voice_id is None:
-        first_stem = files[0].filename
-        if first_stem:
-            voice_id = first_stem.rsplit(".", 1)[0]
-        else:
-            voice_id = f"voice_{int(time.time())}"
+    raw_voice_id = (voice_id or "").strip()
+    if not raw_voice_id:
+        first_name = files[0].filename or ""
+        raw_voice_id = Path(first_name).stem if first_name else ""
+    voice_id = normalize_voice_id(raw_voice_id)
+    if not voice_id:
+        voice_id = f"voice-{int(time.time())}"
 
     file_data: list[tuple[str, bytes]] = []
     for f in files:

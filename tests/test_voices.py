@@ -51,3 +51,28 @@ def test_create_voice_auto_id():
     data = resp.json()
     assert data["id"] == "my_custom_name"
     client.delete(f"/v1/voices/{data['id']}")
+
+
+def test_create_voice_auto_id_normalizes_filename():
+    wav_data = b"\x00" * 1024
+    resp = client.post(
+        "/v1/voices",
+        files={"files": ("My Cool Voice (v1).wav", wav_data, "audio/wav")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == "my-cool-voice-v1"
+    client.delete(f"/v1/voices/{data['id']}")
+
+
+def test_create_voice_custom_id_is_normalized():
+    wav_data = b"\x00" * 1024
+    resp = client.post(
+        "/v1/voices",
+        files={"files": ("sample.wav", wav_data, "audio/wav")},
+        data={"voice_id": "  Team Voice #1  "},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == "team-voice-1"
+    client.delete(f"/v1/voices/{data['id']}")
