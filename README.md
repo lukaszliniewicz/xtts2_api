@@ -22,7 +22,8 @@ bash run.sh --pixi-path /usr/local/bin/pixi
 
 The bootstrapper downloads pixi, creates a Python 3.12 environment, detects your
 hardware (NVIDIA CUDA, AMD ROCm, or CPU), installs the appropriate PyTorch wheel
-and coqui-tts, then starts the server on `http://0.0.0.0:8020`.
+and coqui-tts, preloads the default model into `models/XTTS_2.0.2/` (when
+`XTTS_COQUI_TOS_AGREED=true`), then starts the server on `http://0.0.0.0:8020`.
 
 ## Platform & Backend Compatibility
 
@@ -305,6 +306,7 @@ XTTS_REPETITION_PENALTY=5.0
 | `XTTS_COQUI_TOS_AGREED` | `false` | Accept Coqui terms of service |
 | `XTTS_DEFAULT_LANGUAGE` | `en` | Default language |
 | `XTTS_DEFAULT_MODEL` | `tts_models/multilingual/multi-dataset/xtts_v2` | Default model |
+| `XTTS_DEFAULT_MODEL_LOCAL_DIR` | `XTTS_2.0.2` | Local folder name under `models/` for the default model |
 | `XTTS_TEMPERATURE` | `0.7` | See XTTS Parameters |
 | `XTTS_TOP_P` | `0.85` | |
 | `XTTS_TOP_K` | `50` | |
@@ -339,10 +341,15 @@ Two streaming modes via `stream_format`:
 
 ## Model Cache
 
-The default model is downloaded from HuggingFace on first request (~1.6 GB).
-Model weights are cached in the coqui-tts cache directory. Custom models can be
-placed in `models/<model_id>/` with `config.json`, `model.pth`, `speakers_xtts.pth`,
-and `vocab.json`.
+The launcher pre-downloads the default model (~1.6 GB) into
+`models/XTTS_2.0.2/` during install/start when `XTTS_COQUI_TOS_AGREED=true`.
+If a cached copy already exists in the coqui-tts/HF cache, it is copied into
+`models/` instead of downloading again. If pre-download is skipped or fails,
+the server falls back to downloading on first inference.
+Existing `models/v2.0.2/` is reused and copied forward automatically.
+
+Custom models can be placed in `models/<model_id>/` with `config.json`,
+`model.pth`, `speakers_xtts.pth`, and `vocab.json`.
 
 ## DeepSpeed
 

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     use_deepspeed: bool = True
     default_language: str = "en"
     default_model: str = "tts_models/multilingual/multi-dataset/xtts_v2"
+    default_model_local_dir: str = "XTTS_2.0.2"
     gpt_cond_len: int = 12
     gpt_cond_chunk_len: int = 6
     max_ref_length: int = 12

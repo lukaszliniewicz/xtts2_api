@@ -6,6 +6,7 @@ import platform
 import inspect
 import sys
 import gc
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -83,15 +84,32 @@ except ImportError:
     TTSSDK = None  # type: ignore
     HAS_TTS_SDK = False
 
+try:
+    from TTS.utils.manage import ModelManager
+
+    HAS_MODEL_MANAGER = True
+except ImportError:
+    ModelManager = None  # type: ignore
+    HAS_MODEL_MANAGER = False
+
 
 XTTS_LANGUAGES = [
     "ar", "cs", "de", "en", "es", "fr", "hi", "hu",
     "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "zh-cn",
 ]
+LEGACY_DEFAULT_LOCAL_DIRS = ("v2.0.2",)
 
 
 def is_xtts_model(model_id: str) -> bool:
     return "xtts" in model_id.lower()
+
+
+def _has_model_config(path: Path) -> bool:
+    return path.is_dir() and (path / "config.json").is_file()
+
+
+def _default_model_local_path() -> Path:
+    return settings.models_dir / settings.default_model_local_dir
 
 
 def _coqui_cache_root() -> Path:
@@ -106,15 +124,27 @@ def _coqui_cache_root() -> Path:
 def _find_cached_default() -> Path | None:
     model_name = settings.default_model
 
-    # Check local models/ directory first
-    local = settings.models_dir / model_name
-    if local.is_dir() and (local / "config.json").is_file():
+    # Preferred local model path
+    local = _default_model_local_path()
+    if _has_model_config(local):
         logger.info("Found default model in local models/ directory")
         return local
 
+    # Legacy local path from older releases
+    legacy_local = settings.models_dir / model_name
+    if _has_model_config(legacy_local):
+        logger.info("Found default model in legacy local path")
+        return legacy_local
+
+    for legacy_folder in LEGACY_DEFAULT_LOCAL_DIRS:
+        candidate = settings.models_dir / legacy_folder
+        if _has_model_config(candidate):
+            logger.info("Found default model in legacy local folder: %s", candidate)
+            return candidate
+
     # Check coqui-tts cache
     cached = _coqui_cache_root() / model_name
-    if cached.is_dir() and (cached / "config.json").is_file():
+    if _has_model_config(cached):
         logger.info("Found default model in coqui cache")
         return cached
 
@@ -122,11 +152,79 @@ def _find_cached_default() -> Path | None:
     hf_home = Path(os.environ.get("HF_HOME", ""))
     if hf_home.is_dir():
         hf_cached = hf_home / "models" / model_name
-        if hf_cached.is_dir() and (hf_cached / "config.json").is_file():
+        if _has_model_config(hf_cached):
             logger.info("Found default model in HF_HOME cache")
             return hf_cached
 
     return None
+
+
+def _copy_model_dir(src: Path, dst: Path) -> None:
+    if src.resolve() == dst.resolve():
+        return
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+
+def _download_default_model_to_local(local: Path) -> None:
+    if settings.coqui_tos_agreed:
+        os.environ["COQUI_TOS_AGREED"] = "1"
+
+    settings.models_dir.mkdir(parents=True, exist_ok=True)
+
+    if HAS_MODEL_MANAGER:
+        logger.info("Downloading default model to %s", local)
+        manager = ModelManager(output_prefix=str(settings.models_dir), progress_bar=True)
+        downloaded_path, _config_path, _item = manager.download_model(settings.default_model)
+        source_dir = downloaded_path if downloaded_path.is_dir() else downloaded_path.parent
+        if source_dir.resolve() != local.resolve():
+            logger.info("Copying downloaded default model into %s", local)
+            _copy_model_dir(source_dir, local)
+        return
+
+    if HAS_TTS_SDK:
+        logger.info("Downloading default model from HuggingFace (one-time)...")
+        TTSSDK(settings.default_model)
+        return
+
+    raise ImportError("coqui-tts model download utilities not available")
+
+
+def _ensure_default_model_local() -> Path:
+    local = _default_model_local_path()
+    if _has_model_config(local):
+        return local
+
+    cached = _find_cached_default()
+    if cached is not None and _has_model_config(cached):
+        logger.info("Copying default model from cache to %s", local)
+        try:
+            _copy_model_dir(cached, local)
+        except Exception as exc:
+            logger.warning("Failed to copy cached default model to %s: %s", local, exc)
+        else:
+            if _has_model_config(local):
+                return local
+
+    _download_default_model_to_local(local)
+
+    if _has_model_config(local):
+        return local
+
+    cached = _find_cached_default()
+    if cached is not None and _has_model_config(cached):
+        logger.info("Copying downloaded default model into %s", local)
+        _copy_model_dir(cached, local)
+        if _has_model_config(local):
+            return local
+
+    raise RuntimeError(
+        f"Default model is unavailable at {local}. "
+        "Set XTTS_COQUI_TOS_AGREED=true and verify internet access."
+    )
 
 
 def _resolve_device() -> str:
@@ -190,7 +288,9 @@ class XTTSWrapper:
 
     def _load_from_folder(self):
         assert self.model_info is not None
-        model_path = self.model_info.path
+        self._load_model_from_path(self.model_info.path)
+
+    def _load_model_from_path(self, model_path: Path):
         config_path = model_path / "config.json"
         config = XttsConfig()
         config.load_json(str(config_path))
@@ -205,31 +305,10 @@ class XTTSWrapper:
         self._speaker_manager = getattr(model, "speaker_manager", None)
 
     def _load_default(self):
-        if not HAS_TTS_SDK:
-            raise ImportError("coqui-tts SDK not available")
-
-        # Try loading from local cache first, avoiding HF download
-        cached_path = _find_cached_default()
-        if cached_path is not None:
-            logger.info("Loading default model from %s", cached_path)
-            config = XttsConfig()
-            config.load_json(str(cached_path / "config.json"))
-            model = Xtts.init_from_config(config)
-            model = self._load_checkpoint_with_fallback(
-                model=model,
-                config=config,
-                checkpoint_dir=str(cached_path),
-            )
-            model.to(torch.device(self.device))
-            self.xtts_model = model
-            self._speaker_manager = getattr(model, "speaker_manager", None)
-            return
-
-        if settings.coqui_tos_agreed:
-            os.environ["COQUI_TOS_AGREED"] = "1"
-        logger.info("Downloading default model from HuggingFace (one-time)...")
+        model_path = _ensure_default_model_local()
+        logger.info("Loading default model from %s", model_path)
         try:
-            tts = TTSSDK(settings.default_model).to(self.device)
+            self._load_model_from_path(model_path)
         except RuntimeError as exc:
             if not (self.device.startswith("cuda") and self._is_cuda_runtime_error(exc)):
                 raise
@@ -239,9 +318,7 @@ class XTTSWrapper:
             )
             self.use_deepspeed = False
             self.device = "cpu"
-            tts = TTSSDK(settings.default_model).to(self.device)
-        self.xtts_model = tts.synthesizer.tts_model
-        self._speaker_manager = getattr(self.xtts_model, "speaker_manager", None)
+            self._load_model_from_path(model_path)
 
     def get_conditioning_latents(self, audio_path: list[str], **kwargs):
         self.load()

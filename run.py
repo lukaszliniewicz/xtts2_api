@@ -8,6 +8,7 @@ import importlib.util
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,16 @@ TORCH_VERSION = "2.6.0"
 TORCHVISION_VERSION = "0.21.0"
 TORCHAUDIO_VERSION = "2.6.0"
 PIXI_PATH_OVERRIDE: Path | None = None
+
+DEFAULT_MODEL_ID = "tts_models/multilingual/multi-dataset/xtts_v2"
+DEFAULT_MODEL_LOCAL_DIR = "XTTS_2.0.2"
+DEFAULT_MODEL_REQUIRED_FILES = (
+    "config.json",
+    "model.pth",
+    "speakers_xtts.pth",
+    "vocab.json",
+)
+LEGACY_DEFAULT_MODEL_DIRS = ("v2.0.2",)
 
 os.environ.setdefault("PIP_CACHE_DIR", str(PROJECT_DIR / ".pip-cache"))
 os.environ.setdefault("PIXI_CACHE_DIR", str(PROJECT_DIR / ".pixi-cache"))
@@ -63,6 +74,120 @@ def _pip_install(*args: str) -> bool:
 
 def _check_package(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
+
+
+def _default_model_path() -> Path:
+    local_dir = os.environ.get("XTTS_DEFAULT_MODEL_LOCAL_DIR") or _read_dotenv_var(
+        "XTTS_DEFAULT_MODEL_LOCAL_DIR"
+    )
+    return PROJECT_DIR / "models" / (local_dir or DEFAULT_MODEL_LOCAL_DIR)
+
+
+def _default_model_id() -> str:
+    return os.environ.get("XTTS_DEFAULT_MODEL") or _read_dotenv_var("XTTS_DEFAULT_MODEL") or DEFAULT_MODEL_ID
+
+
+def _has_local_default_model() -> bool:
+    model_dir = _default_model_path()
+    if not model_dir.is_dir():
+        return False
+    return all((model_dir / name).is_file() for name in DEFAULT_MODEL_REQUIRED_FILES)
+
+
+def _find_local_legacy_model() -> Path | None:
+    for folder in LEGACY_DEFAULT_MODEL_DIRS:
+        candidate = PROJECT_DIR / "models" / folder
+        if candidate == _default_model_path():
+            continue
+        if candidate.is_dir() and all((candidate / name).is_file() for name in DEFAULT_MODEL_REQUIRED_FILES):
+            return candidate
+    return None
+
+
+def _bool_value(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_dotenv_var(name: str) -> str | None:
+    env_file = PROJECT_DIR / ".env"
+    if not env_file.is_file():
+        return None
+
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() != name:
+            continue
+        return value.strip().strip("\"'")
+
+    return None
+
+
+def _is_coqui_tos_agreed() -> bool:
+    checks = [
+        os.environ.get("COQUI_TOS_AGREED"),
+        os.environ.get("XTTS_COQUI_TOS_AGREED"),
+        _read_dotenv_var("COQUI_TOS_AGREED"),
+        _read_dotenv_var("XTTS_COQUI_TOS_AGREED"),
+    ]
+    return any(_bool_value(v) for v in checks)
+
+
+def ensure_default_model() -> bool:
+    if _has_local_default_model():
+        return True
+
+    model_dir = _default_model_path()
+    legacy_model = _find_local_legacy_model()
+    if legacy_model is not None:
+        log.info("Copying default model from %s to %s", legacy_model, model_dir)
+        model_dir.parent.mkdir(parents=True, exist_ok=True)
+        if model_dir.exists():
+            shutil.rmtree(model_dir)
+        shutil.copytree(legacy_model, model_dir)
+        if _has_local_default_model():
+            return True
+
+    if not _check_package("TTS"):
+        log.warning("coqui-tts is not installed; skipping default model predownload")
+        return False
+
+    if not _is_coqui_tos_agreed():
+        log.info(
+            "Skipping default model predownload; set XTTS_COQUI_TOS_AGREED=true to download during install."
+        )
+        return False
+
+    model_dir.parent.mkdir(parents=True, exist_ok=True)
+    os.environ["COQUI_TOS_AGREED"] = "1"
+
+    try:
+        from TTS.utils.manage import ModelManager
+
+        log.info("Ensuring default model in %s", model_dir)
+        manager = ModelManager(output_prefix=str(PROJECT_DIR / "models"), progress_bar=True)
+        downloaded_path, _config, _item = manager.download_model(_default_model_id())
+        source_dir = downloaded_path if downloaded_path.is_dir() else downloaded_path.parent
+
+        if source_dir.resolve() != model_dir.resolve():
+            if model_dir.exists():
+                shutil.rmtree(model_dir)
+            shutil.copytree(source_dir, model_dir)
+
+        if _has_local_default_model():
+            log.info("Default model ready at %s", model_dir)
+            return True
+
+        log.warning("Default model download completed but expected files are missing in %s", model_dir)
+        return False
+    except Exception as exc:
+        first_line = str(exc).splitlines()[0] if str(exc) else repr(exc)
+        log.warning("Default model predownload failed: %s", first_line)
+        return False
 
 
 def detect_hardware(force_cpu: bool = False) -> str:
@@ -243,6 +368,8 @@ def main() -> None:
         log.info("Installation complete.\n")
     else:
         log.info("All dependencies already installed.\n")
+
+    ensure_default_model()
 
     start_server()
 
