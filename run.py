@@ -458,7 +458,7 @@ def ensure_deepspeed(backend: str) -> None:
     if _check_package("deepspeed"):
         return
     log.info("Installing deepspeed...")
-    _pip_install("--no-deps", "deepspeed==0.16.5")
+    _pip_install("deepspeed==0.16.5")
 
 
 def start_server() -> None:

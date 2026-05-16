@@ -64,7 +64,7 @@ bin\pixi run pip install coqui-tts
 bin\pixi run pip install "transformers>=4,<5"
 
 # 4. (CUDA only) Install DeepSpeed
-bin\pixi run pip install --no-deps deepspeed==0.16.5
+bin\pixi run pip install deepspeed==0.16.5
 
 # 5. Start
 bin\pixi run python -m uvicorn src.xtts_fastapi.main:app --host 0.0.0.0 --port 8020 --no-access-log
