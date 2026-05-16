@@ -391,7 +391,6 @@ checkpoint loading without DeepSpeed if initialization fails.
 
 ## Notes
 
-- `/v1/files` can store any file type, but XTTS voice cloning works best with clean mono WAV references.
 - Voice samples should be mono WAV files. Any sample rate is fine (resampled to 24kHz).
 - Reference audio quality matters more than quantity. A single clean 6-second
   clip often beats a noisy 30-second clip.
