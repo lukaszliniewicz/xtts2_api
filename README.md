@@ -22,6 +22,8 @@ bash run.sh --pixi-path /usr/local/bin/pixi
 
 A bundled reference voice sample is included at
 `voices/sample_male/sample_male_new.wav` for quick voice-cloning smoke tests.
+On startup, the server auto-registers staged `voices/<voice_id>/*.wav` folders
+that do not yet have a `meta.json`.
 
 The bootstrapper downloads pixi, creates a Python 3.12 environment, detects your
 hardware (NVIDIA CUDA, AMD ROCm, or CPU), installs the appropriate PyTorch wheel

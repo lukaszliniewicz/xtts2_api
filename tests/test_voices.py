@@ -1,6 +1,10 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from src.xtts_fastapi.main import app
+from src.xtts_fastapi.settings import settings
+from src.xtts_fastapi.voices import VoiceStore
 
 client = TestClient(app)
 
@@ -76,3 +80,50 @@ def test_create_voice_custom_id_is_normalized():
     data = resp.json()
     assert data["id"] == "team-voice-1"
     client.delete(f"/v1/voices/{data['id']}")
+
+
+def test_register_staged_voices_creates_meta(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "voices_dir", tmp_path)
+    voice_dir = tmp_path / "staged_voice"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    (voice_dir / "sample_b.wav").write_bytes(b"\x00" * 256)
+    (voice_dir / "sample_a.WAV").write_bytes(b"\x00" * 128)
+
+    store = VoiceStore()
+    registered = store.register_staged_voices()
+
+    assert registered == 1
+    meta_path = voice_dir / "meta.json"
+    assert meta_path.is_file()
+
+    meta = json.loads(meta_path.read_text())
+    assert meta["voice_id"] == "staged_voice"
+    assert [item["filename"] for item in meta["files"]] == ["sample_a.WAV", "sample_b.wav"]
+    assert [item["size"] for item in meta["files"]] == [128, 256]
+
+    listed = store.list_all()
+    assert len(listed) == 1
+    assert listed[0].voice_id == "staged_voice"
+
+
+def test_register_staged_voices_skips_existing_meta(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "voices_dir", tmp_path)
+    voice_dir = tmp_path / "pre_registered"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    (voice_dir / "sample.wav").write_bytes(b"\x00" * 64)
+
+    original_meta = {
+        "voice_id": "pre_registered",
+        "created": 123,
+        "model": "custom-model",
+        "language": "fr",
+        "files": [{"filename": "sample.wav", "size": 64}],
+    }
+    meta_path = voice_dir / "meta.json"
+    meta_path.write_text(json.dumps(original_meta, indent=2))
+
+    store = VoiceStore()
+    registered = store.register_staged_voices()
+
+    assert registered == 0
+    assert json.loads(meta_path.read_text()) == original_meta

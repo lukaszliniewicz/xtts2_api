@@ -189,6 +189,9 @@ async def startup():
         import os
 
         os.environ["COQUI_TOS_AGREED"] = "1"
+    registered = voice_store.register_staged_voices()
+    if registered:
+        app_logger.info("Registered %d staged voice(s) from %s", registered, settings.voices_dir)
     registry.discover()
     registry.start_watching()
 

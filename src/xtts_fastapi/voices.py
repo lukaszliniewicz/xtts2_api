@@ -74,6 +74,51 @@ class VoiceStore:
             created=created,
         )
 
+    def register_staged_voices(self) -> int:
+        if not self._base_dir.is_dir():
+            return 0
+
+        registered = 0
+        entries = sorted(self._base_dir.iterdir(), key=lambda item: item.name.lower())
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+
+            voice_id = entry.name
+            meta_path = self._meta_path(voice_id)
+            if meta_path.is_file():
+                continue
+
+            wav_files = [
+                file_path
+                for file_path in sorted(entry.iterdir(), key=lambda item: item.name.lower())
+                if file_path.is_file() and file_path.suffix.lower() == ".wav"
+            ]
+            if not wav_files:
+                continue
+
+            created = int(min(file_path.stat().st_mtime for file_path in wav_files))
+            file_list = [
+                {
+                    "filename": file_path.name,
+                    "size": file_path.stat().st_size,
+                }
+                for file_path in wav_files
+            ]
+
+            meta = {
+                "voice_id": voice_id,
+                "created": created,
+                "model": None,
+                "language": None,
+                "files": file_list,
+            }
+            meta_path.write_text(json.dumps(meta, indent=2))
+            registered += 1
+            logger.info("Registered staged voice '%s' with %d sample(s)", voice_id, len(file_list))
+
+        return registered
+
     def get(self, voice_id: str) -> dict | None:
         mpath = self._meta_path(voice_id)
         if not mpath.is_file():
