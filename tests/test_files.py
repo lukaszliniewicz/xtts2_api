@@ -43,7 +43,7 @@ def test_files_wav_upload_promotes_to_voice():
     assert voice_obj["id"] == expected_voice_id
     assert voice_obj["sample_count"] == 1
 
-    listed_voices = client.get("/v1/voices")
+    listed_voices = client.get("/v1/audio/voices")
     assert listed_voices.status_code == 200
     voice_ids = [item["voice_id"] for item in listed_voices.json()["data"]]
     assert expected_voice_id in voice_ids

@@ -133,11 +133,15 @@ Download legacy file bytes.
 
 Delete a legacy file.
 
+### `GET /v1/audio/voices`
+
+List available voices.
+
 ### `GET /v1/voices`
 
-List uploaded voices.
+Legacy alias for `GET /v1/audio/voices` during migration.
 
-### `POST /v1/voices`
+### `POST /v1/audio/voices`
 
 Upload voice samples. Accepts multipart form data.
 
@@ -149,6 +153,9 @@ Upload voice samples. Accepts multipart form data.
 
 If `voice_id` is omitted, the server derives it from the first uploaded filename
 stem and normalizes it (lowercase, punctuation/spaces collapsed to `-`).
+
+For non-cloning backends, this endpoint returns `501 Not Implemented` with a
+clear error message while `GET /v1/audio/voices` still works.
 
 ### `DELETE /v1/voices/{voice_id}`
 
@@ -177,8 +184,9 @@ Generate speech (OpenAI-compatible).
 
 ## Recommended SDK Flow
 
-Use `/v1/voices` when your client can call it directly. `/v1/files` now accepts
-WAV only and returns a voice object (`id` is the voice ID to pass as `voice`).
+Use `/v1/audio/voices` for voice discovery/upload. `GET /v1/voices` remains a
+legacy alias during migration. `/v1/files` accepts WAV only and returns a voice
+object (`id` is the voice ID to pass as `voice`).
 
 ### OpenAI Python SDK
 
@@ -325,6 +333,8 @@ XTTS_REPETITION_PENALTY=5.0
 | `XTTS_HOST` | `0.0.0.0` | Bind address |
 | `XTTS_PORT` | `8020` | Port |
 | `XTTS_DEVICE` | `auto` | `auto`, `cuda`, `cpu` |
+| `XTTS_SPEECH_BACKEND` | `xtts` | Logical backend name used in capability messages (for example `xtts`, `voxtral`, `kokoro`) |
+| `XTTS_VOICE_CLONING_ENABLED` | `true` | Enables `POST /v1/audio/voices`; set `false` for non-cloning backends (returns `501`) |
 | `XTTS_USE_DEEPSPEED` | `true` | Enable DeepSpeed (CUDA only) |
 | `XTTS_COQUI_TOS_AGREED` | `true` | Accept Coqui terms of service (set `false` to opt out) |
 | `XTTS_DEFAULT_LANGUAGE` | `en` | Default language |

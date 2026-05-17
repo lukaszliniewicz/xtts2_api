@@ -310,6 +310,22 @@ def _looks_like_wav(data: bytes) -> bool:
     return riff_header in {b"RIFF", b"RIFX", b"RF64"} and data[8:12] == b"WAVE"
 
 
+def _ensure_voice_ingestion_supported() -> None:
+    if settings.voice_cloning_enabled:
+        return
+
+    backend_name = (settings.speech_backend or "unknown").strip().lower() or "unknown"
+    raise APIError(
+        (
+            f"Voice sample ingestion is not implemented for backend '{backend_name}'. "
+            "This backend does not support voice cloning. "
+            "Use GET /v1/audio/voices to list available voices."
+        ),
+        code="voice_ingestion_not_implemented",
+        status=501,
+    )
+
+
 @app.get("/health")
 async def health():
     return {
@@ -400,18 +416,21 @@ async def delete_file(file_id: str):
     return file_store.delete_response(file_id)
 
 
+@app.get("/v1/audio/voices", response_model=VoiceList)
 @app.get("/v1/voices", response_model=VoiceList)
 async def list_voices():
     return VoiceList(data=voice_store.list_all())
 
 
-@app.post("/v1/voices", response_model=VoiceCreateResponse)
+@app.post("/v1/audio/voices", response_model=VoiceCreateResponse)
 async def create_voice(
     files: list[UploadFile] = File(..., description="Audio sample files"),
     voice_id: str = Form(None, description="Custom voice ID (normalized)"),
     model: str = Form(None, description="Associated model ID"),
     language: str = Form(None, description="Language code"),
 ):
+    _ensure_voice_ingestion_supported()
+
     if not files:
         raise APIError("At least one audio file is required", param="files", code="missing_files")
 

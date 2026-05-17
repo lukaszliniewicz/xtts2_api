@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     request_id_header: str = "X-Request-ID"
     coqui_tos_agreed: bool = True
     device: str = "auto"
+    speech_backend: str = "xtts"
+    voice_cloning_enabled: bool = True
     use_deepspeed: bool = True
     default_language: str = "en"
     default_model: str = "tts_models/multilingual/multi-dataset/xtts_v2"

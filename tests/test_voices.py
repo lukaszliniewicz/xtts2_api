@@ -10,21 +10,25 @@ client = TestClient(app)
 
 
 def test_list_voices_empty():
-    resp = client.get("/v1/voices")
+    resp = client.get("/v1/audio/voices")
     assert resp.status_code == 200
     data = resp.json()
     assert data["object"] == "list"
 
+    legacy_resp = client.get("/v1/voices")
+    assert legacy_resp.status_code == 200
+    assert legacy_resp.json() == data
+
 
 def test_create_voice_no_files():
-    resp = client.post("/v1/voices")
+    resp = client.post("/v1/audio/voices")
     assert resp.status_code in (400, 422)
 
 
 def test_create_and_delete_voice():
     wav_data = b"\x00" * 1024
     resp = client.post(
-        "/v1/voices",
+        "/v1/audio/voices",
         files={"files": ("test_sample.wav", wav_data, "audio/wav")},
         data={"voice_id": "test_voice"},
     )
@@ -33,7 +37,7 @@ def test_create_and_delete_voice():
     assert data["id"] == "test_voice"
     assert data["sample_count"] >= 1
 
-    resp = client.get("/v1/voices")
+    resp = client.get("/v1/audio/voices")
     assert resp.status_code == 200
     ids = [v["voice_id"] for v in resp.json()["data"]]
     assert "test_voice" in ids
@@ -48,7 +52,7 @@ def test_create_and_delete_voice():
 def test_create_voice_auto_id():
     wav_data = b"\x00" * 1024
     resp = client.post(
-        "/v1/voices",
+        "/v1/audio/voices",
         files={"files": ("my_custom_name.wav", wav_data, "audio/wav")},
     )
     assert resp.status_code == 200
@@ -60,7 +64,7 @@ def test_create_voice_auto_id():
 def test_create_voice_auto_id_normalizes_filename():
     wav_data = b"\x00" * 1024
     resp = client.post(
-        "/v1/voices",
+        "/v1/audio/voices",
         files={"files": ("My Cool Voice (v1).wav", wav_data, "audio/wav")},
     )
     assert resp.status_code == 200
@@ -72,7 +76,7 @@ def test_create_voice_auto_id_normalizes_filename():
 def test_create_voice_custom_id_is_normalized():
     wav_data = b"\x00" * 1024
     resp = client.post(
-        "/v1/voices",
+        "/v1/audio/voices",
         files={"files": ("sample.wav", wav_data, "audio/wav")},
         data={"voice_id": "  Team Voice #1  "},
     )
@@ -80,6 +84,22 @@ def test_create_voice_custom_id_is_normalized():
     data = resp.json()
     assert data["id"] == "team-voice-1"
     client.delete(f"/v1/voices/{data['id']}")
+
+
+def test_create_voice_returns_not_implemented_when_ingestion_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "voice_cloning_enabled", False)
+    monkeypatch.setattr(settings, "speech_backend", "kokoro")
+
+    wav_data = b"\x00" * 1024
+    resp = client.post(
+        "/v1/audio/voices",
+        files={"files": ("sample.wav", wav_data, "audio/wav")},
+    )
+
+    assert resp.status_code == 501
+    data = resp.json()
+    assert data["error"]["code"] == "voice_ingestion_not_implemented"
+    assert "kokoro" in data["error"]["message"]
 
 
 def test_register_staged_voices_creates_meta(tmp_path, monkeypatch):
