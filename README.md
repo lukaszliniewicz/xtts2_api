@@ -328,6 +328,8 @@ XTTS_REPETITION_PENALTY=5.0
 | `XTTS_DEFAULT_LANGUAGE` | `en` | Default language |
 | `XTTS_DEFAULT_MODEL` | `tts_models/multilingual/multi-dataset/xtts_v2` | Default model |
 | `XTTS_DEFAULT_MODEL_LOCAL_DIR` | `XTTS_2.0.2` | Local folder name under `models/` for the default model |
+| `XTTS_MODEL_WATCH_ENABLED` | `true` | Auto-refresh model registry when files in `models/` change |
+| `XTTS_MODEL_WATCH_DEBOUNCE_SECONDS` | `1.0` | Debounce window for filesystem-triggered model refresh |
 | `XTTS_TEMPERATURE` | `0.7` | See XTTS Parameters |
 | `XTTS_TOP_P` | `0.85` | |
 | `XTTS_TOP_K` | `50` | |
@@ -376,8 +378,11 @@ On startup, the launcher validates required model files (`config.json`,
 `model.pth`, `speakers_xtts.pth`, `vocab.json`) and scans `models/` recursively
 for a complete bundle before attempting a new download.
 
-Custom models can be placed in `models/<model_id>/` with `config.json`,
-`model.pth`, `speakers_xtts.pth`, and `vocab.json`.
+Custom models can be placed anywhere under `models/` (nested folders are
+supported) if the model folder contains `config.json`, `model.pth`,
+`speakers_xtts.pth`, and `vocab.json`. The server watches `models/`
+recursively and auto-refreshes the model registry when these folders/files
+change.
 
 ## DeepSpeed
 

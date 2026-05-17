@@ -7,8 +7,17 @@ from src.xtts_fastapi.model_loader import (
     _has_complete_default_model,
     _resolve_default_hf_source,
 )
+from src.xtts_fastapi.registry import ModelRegistry
 
 client = TestClient(app)
+
+
+def _write_complete_model_bundle(path):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "config.json").write_text("{}", encoding="utf-8")
+    (path / "model.pth").write_bytes(b"weights")
+    (path / "speakers_xtts.pth").write_bytes(b"speakers")
+    (path / "vocab.json").write_text("{}", encoding="utf-8")
 
 
 def test_list_models_empty():
@@ -75,3 +84,33 @@ def test_find_default_model_in_tree_finds_nested_complete_bundle(tmp_path):
 
     found = _find_default_model_in_tree(models_root, "tts_models/multilingual/multi-dataset/xtts_v2")
     assert found == complete
+
+
+def test_registry_discover_supports_nested_model_folders(tmp_path, monkeypatch):
+    models_root = tmp_path / "models"
+    _write_complete_model_bundle(models_root / "flat_model")
+    _write_complete_model_bundle(models_root / "nested" / "sub" / "model_x")
+
+    monkeypatch.setattr("src.xtts_fastapi.registry.settings.models_dir", models_root)
+
+    local_registry = ModelRegistry()
+    model_ids = sorted(model.model_id for model in local_registry.discover())
+
+    assert model_ids == ["flat_model", "nested/sub/model_x"]
+
+
+def test_registry_discover_requires_all_model_files(tmp_path, monkeypatch):
+    models_root = tmp_path / "models"
+    _write_complete_model_bundle(models_root / "complete")
+
+    incomplete = models_root / "incomplete"
+    incomplete.mkdir(parents=True, exist_ok=True)
+    (incomplete / "config.json").write_text("{}", encoding="utf-8")
+    (incomplete / "model.pth").write_bytes(b"weights")
+
+    monkeypatch.setattr("src.xtts_fastapi.registry.settings.models_dir", models_root)
+
+    local_registry = ModelRegistry()
+    model_ids = [model.model_id for model in local_registry.discover()]
+
+    assert model_ids == ["complete"]

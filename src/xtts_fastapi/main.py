@@ -190,6 +190,12 @@ async def startup():
 
         os.environ["COQUI_TOS_AGREED"] = "1"
     registry.discover()
+    registry.start_watching()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    registry.stop_watching()
 
 
 def _parse_instruction_overrides(instructions: str | None) -> tuple[str | None, dict | None]:

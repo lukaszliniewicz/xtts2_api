@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     default_language: str = "en"
     default_model: str = "tts_models/multilingual/multi-dataset/xtts_v2"
     default_model_local_dir: str = "XTTS_2.0.2"
+    model_watch_enabled: bool = True
+    model_watch_debounce_seconds: float = Field(default=1.0, ge=0.0)
     gpt_cond_len: int = 12
     gpt_cond_chunk_len: int = 6
     max_ref_length: int = 12
