@@ -29,6 +29,7 @@ from .api_models import (
     VoiceList,
 )
 from .audio import convert_wav_bytes, SUPPORTED_FORMATS
+from . import model_loader
 from .engine import engine
 from .errors import APIError
 from .file_store import file_store
@@ -328,13 +329,19 @@ def _ensure_voice_ingestion_supported() -> None:
 
 @app.get("/health")
 async def health():
-    return {
+    payload = {
         "status": "ok",
         "version": "0.1.0",
         "model_count": len(registry.list_models()),
         "voice_count": len(voice_store.list_all()),
         "device": settings.device,
     }
+    if model_loader.HAS_XTTS:
+        return payload
+
+    payload["status"] = "unavailable"
+    payload["runtime_error"] = str(model_loader.XTTS_IMPORT_ERROR or "unknown import error")
+    return JSONResponse(payload, status_code=503)
 
 
 @app.get("/v1/models", response_model=ModelList)

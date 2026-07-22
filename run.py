@@ -83,6 +83,30 @@ def _check_package(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def _check_xtts_runtime(*, report_failure: bool = True) -> bool:
+    """Check the imports used by the server in a clean interpreter."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from TTS.tts.configs.xtts_config import XttsConfig; "
+                "from TTS.tts.models.xtts import Xtts"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return True
+
+    if report_failure:
+        details = (result.stderr or result.stdout).strip()
+        last_line = details.splitlines()[-1] if details else "unknown import error"
+        log.warning("XTTS runtime import check failed: %s", last_line)
+    return False
+
+
 def _default_model_path() -> Path:
     local_dir = os.environ.get("XTTS_DEFAULT_MODEL_LOCAL_DIR") or _read_dotenv_var(
         "XTTS_DEFAULT_MODEL_LOCAL_DIR"
@@ -316,8 +340,8 @@ def ensure_default_model() -> bool:
             log.info("Default model ready at %s", model_dir)
             return True
 
-    if not _check_package("TTS"):
-        log.warning("coqui-tts is not installed; skipping default model predownload")
+    if not _check_xtts_runtime():
+        log.warning("coqui-tts is not usable; skipping default model predownload")
         return False
 
     try:
@@ -446,15 +470,12 @@ def ensure_torch(backend: str) -> bool:
 
 
 def ensure_coqui_tts() -> bool:
-    if _check_package("TTS"):
+    if _check_xtts_runtime(report_failure=False):
         return True
     log.info("Installing coqui-tts...")
-    _pip_install("coqui-tts")
-    if not _check_package("TTS"):
-        log.warning("coqui-tts install had issues")
+    if not _pip_install("coqui-tts", "transformers>=4.0,<5", "numpy>=2.0,<2.5"):
         return False
-    _pip_install("transformers>=4.0,<5")
-    return True
+    return _check_xtts_runtime()
 
 
 def ensure_deepspeed(backend: str) -> None:
@@ -512,7 +533,7 @@ def main() -> None:
     backend = args.backend if args.backend != "auto" else detect_hardware(args.cpu)
     log.info("Selected backend: %s", backend)
 
-    needs_install = not (check_backend(backend) and _check_package("TTS"))
+    needs_install = not (check_backend(backend) and _check_xtts_runtime(report_failure=False))
 
     if needs_install:
         log.info("Dependencies missing or incomplete, installing...")
@@ -520,7 +541,8 @@ def main() -> None:
             log.error("Failed to install torch, aborting")
             sys.exit(1)
         if not ensure_coqui_tts():
-            log.warning("coqui-tts installation had issues")
+            log.error("coqui-tts is installed but the XTTS runtime cannot be imported; aborting")
+            sys.exit(1)
         ensure_deepspeed(backend)
         log.info("Installation complete.\n")
     else:

@@ -73,16 +73,18 @@ try:
     from TTS.tts.models.xtts import Xtts
 
     HAS_XTTS = True
-except ImportError:
+    XTTS_IMPORT_ERROR: Exception | None = None
+except Exception as exc:
     Xtts = None  # type: ignore
     XttsConfig = None  # type: ignore
     HAS_XTTS = False
+    XTTS_IMPORT_ERROR = exc
 
 try:
     from TTS.api import TTS as TTSSDK
 
     HAS_TTS_SDK = True
-except ImportError:
+except Exception:
     TTSSDK = None  # type: ignore
     HAS_TTS_SDK = False
 
@@ -90,7 +92,7 @@ try:
     from TTS.utils.manage import ModelManager
 
     HAS_MODEL_MANAGER = True
-except ImportError:
+except Exception:
     ModelManager = None  # type: ignore
     HAS_MODEL_MANAGER = False
 
@@ -574,7 +576,10 @@ class XTTSWrapper:
             return
 
         if not HAS_XTTS:
-            raise ImportError("coqui-tts is not installed. Run the installer first.")
+            message = "The coqui-tts XTTS runtime could not be imported"
+            if XTTS_IMPORT_ERROR is not None:
+                message = f"{message}: {XTTS_IMPORT_ERROR}"
+            raise ImportError(message) from XTTS_IMPORT_ERROR
 
         if self.model_info is not None:
             self._load_from_folder()
