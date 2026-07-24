@@ -89,10 +89,7 @@ def _check_xtts_runtime(*, report_failure: bool = True) -> bool:
         [
             sys.executable,
             "-c",
-            (
-                "from TTS.tts.configs.xtts_config import XttsConfig; "
-                "from TTS.tts.models.xtts import Xtts"
-            ),
+            "from src.xtts_fastapi.coqui_compat import import_xtts_runtime; import_xtts_runtime()",
         ],
         capture_output=True,
         text=True,
@@ -345,7 +342,10 @@ def ensure_default_model() -> bool:
         return False
 
     try:
-        from TTS.utils.manage import ModelManager
+        from src.xtts_fastapi.coqui_compat import xtts_import_context
+
+        with xtts_import_context():
+            from TTS.utils.manage import ModelManager
 
         log.info("Ensuring default model in %s", model_dir)
         manager = ModelManager(output_prefix=str(PROJECT_DIR / "models"), progress_bar=True)

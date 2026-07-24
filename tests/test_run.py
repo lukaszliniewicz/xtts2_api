@@ -13,7 +13,7 @@ def test_xtts_runtime_check_imports_model_in_clean_interpreter():
     command = subprocess_run.call_args.args[0]
     assert command[0] == run.sys.executable
     assert command[1] == "-c"
-    assert "TTS.tts.models.xtts" in command[2]
+    assert "import_xtts_runtime" in command[2]
 
 
 def test_xtts_runtime_check_rejects_broken_transitive_import():

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from .coqui_compat import import_xtts_runtime, xtts_import_context
+
 
 def _nvcc_name() -> str:
     return "nvcc.exe" if platform.system() == "Windows" else "nvcc"
@@ -69,8 +71,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 try:
-    from TTS.tts.configs.xtts_config import XttsConfig
-    from TTS.tts.models.xtts import Xtts
+    XttsConfig, Xtts = import_xtts_runtime()
 
     HAS_XTTS = True
     XTTS_IMPORT_ERROR: Exception | None = None
@@ -81,7 +82,8 @@ except Exception as exc:
     XTTS_IMPORT_ERROR = exc
 
 try:
-    from TTS.api import TTS as TTSSDK
+    with xtts_import_context():
+        from TTS.api import TTS as TTSSDK
 
     HAS_TTS_SDK = True
 except Exception:
@@ -89,7 +91,8 @@ except Exception:
     HAS_TTS_SDK = False
 
 try:
-    from TTS.utils.manage import ModelManager
+    with xtts_import_context():
+        from TTS.utils.manage import ModelManager
 
     HAS_MODEL_MANAGER = True
 except Exception:
