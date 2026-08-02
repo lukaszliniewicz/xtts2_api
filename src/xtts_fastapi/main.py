@@ -4,8 +4,8 @@ import base64
 import json
 import logging
 import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import AsyncGenerator
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
@@ -18,18 +18,18 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from . import model_loader
 from .api_models import (
     CreateSpeechRequest,
     FileDeletedResponse,
     FileListResponse,
     FileObject,
     ModelList,
-    XTTSParams,
     VoiceCreateResponse,
     VoiceList,
+    XTTSParams,
 )
-from .audio import convert_wav_bytes, SUPPORTED_FORMATS
-from . import model_loader
+from .audio import SUPPORTED_FORMATS
 from .engine import engine
 from .errors import APIError
 from .file_store import file_store
@@ -63,7 +63,7 @@ INSTRUCTION_XTTS_FIELDS = set(XTTSParams.model_fields.keys())
 app = FastAPI(
     title="XTTS FastAPI Server",
     description="OpenAI-compatible text-to-speech server",
-    version="0.1.0",
+    version="0.1.1",
     docs_url="/",
 )
 
@@ -331,10 +331,11 @@ def _ensure_voice_ingestion_supported() -> None:
 async def health():
     payload = {
         "status": "ok",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "model_count": len(registry.list_models()),
         "voice_count": len(voice_store.list_all()),
         "device": settings.device,
+        "conditioning_cache": engine.conditioning_cache_info(),
     }
     if model_loader.HAS_XTTS:
         return payload
@@ -458,12 +459,14 @@ async def create_voice(
         file_data.append((name, content))
 
     result = voice_store.create(voice_id, file_data, model=model, language=language)
+    engine.clear_conditioning_cache()
     return result
 
 
 @app.delete("/v1/voices/{voice_id}")
 async def delete_voice(voice_id: str):
     if voice_store.delete(voice_id):
+        engine.clear_conditioning_cache()
         return {"deleted": True, "id": voice_id}
     raise APIError(f"Voice '{voice_id}' not found", param="voice_id", code="voice_not_found", status=404)
 

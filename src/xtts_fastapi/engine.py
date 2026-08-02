@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
+from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 
-from .audio import convert_wav_bytes, numpy_to_wav, SAMPLE_RATE
+from .audio import SAMPLE_RATE, convert_wav_bytes, numpy_to_wav
 from .errors import (
     invalid_reference_audio,
     missing_speaker_wav,
@@ -16,7 +18,7 @@ from .errors import (
     unsupported_language,
 )
 from .file_store import file_store
-from .model_loader import XTTSWrapper, XTTS_LANGUAGES, is_xtts_model
+from .model_loader import XTTS_LANGUAGES, XTTSWrapper
 from .registry import ModelInfo
 from .settings import settings
 from .voices import voice_store
@@ -31,17 +33,23 @@ class InferenceEngine:
     def __init__(self):
         self._models: dict[str, XTTSWrapper] = {}
         self._locks: dict[str, Lock] = {}
-        self._latent_cache: dict[str, tuple] = {}
+        self._registry_lock = Lock()
+        self._latent_cache: OrderedDict[tuple, tuple] = OrderedDict()
+        self._latent_cache_lock = Lock()
+        self._latent_cache_hits = 0
+        self._latent_cache_misses = 0
 
     def _get_lock(self, model_id: str) -> Lock:
-        if model_id not in self._locks:
-            self._locks[model_id] = Lock()
-        return self._locks[model_id]
+        with self._registry_lock:
+            if model_id not in self._locks:
+                self._locks[model_id] = Lock()
+            return self._locks[model_id]
 
     def _get_wrapper(self, model_id: str, model_info: ModelInfo | None = None) -> XTTSWrapper:
-        if model_id not in self._models:
-            self._models[model_id] = XTTSWrapper(model_info)
-        return self._models[model_id]
+        with self._registry_lock:
+            if model_id not in self._models:
+                self._models[model_id] = XTTSWrapper(model_info)
+            return self._models[model_id]
 
     def validate_language(self, language: str):
         lang = language.split("-")[0]
@@ -186,6 +194,99 @@ class InferenceEngine:
 
         return kwargs
 
+    @staticmethod
+    def _reference_fingerprint(paths: list[str]) -> tuple[tuple[str, int | None, int | None], ...]:
+        fingerprint = []
+        for raw_path in paths:
+            path = Path(raw_path).expanduser()
+            try:
+                resolved = path.resolve()
+                stat = resolved.stat()
+                fingerprint.append((str(resolved), stat.st_size, stat.st_mtime_ns))
+            except OSError:
+                fingerprint.append((str(path), None, None))
+        return tuple(fingerprint)
+
+    @staticmethod
+    def _freeze_cache_value(value):
+        if isinstance(value, dict):
+            return tuple(sorted((key, InferenceEngine._freeze_cache_value(item)) for key, item in value.items()))
+        if isinstance(value, (list, tuple)):
+            return tuple(InferenceEngine._freeze_cache_value(item) for item in value)
+        if isinstance(value, set):
+            return tuple(sorted(InferenceEngine._freeze_cache_value(item) for item in value))
+        try:
+            hash(value)
+        except TypeError:
+            return repr(value)
+        return value
+
+    def _conditioning_cache_key(
+        self,
+        wrapper: XTTSWrapper,
+        speaker_wav_paths: list[str],
+        voice_kwargs: dict,
+    ) -> tuple:
+        return (
+            id(wrapper.model),
+            wrapper.device,
+            self._reference_fingerprint(speaker_wav_paths),
+            tuple(
+                sorted(
+                    (key, self._freeze_cache_value(value))
+                    for key, value in voice_kwargs.items()
+                )
+            ),
+        )
+
+    def _get_conditioning_latents(
+        self,
+        wrapper: XTTSWrapper,
+        speaker_wav_paths: list[str],
+        voice_kwargs: dict,
+    ) -> tuple:
+        cache_size = max(int(settings.voice_cache_size), 0)
+        lookup_key = self._conditioning_cache_key(wrapper, speaker_wav_paths, voice_kwargs)
+
+        if cache_size:
+            with self._latent_cache_lock:
+                cached = self._latent_cache.get(lookup_key)
+                if cached is not None:
+                    self._latent_cache.move_to_end(lookup_key)
+                    self._latent_cache_hits += 1
+                    return cached
+                self._latent_cache_misses += 1
+
+        latents = wrapper.get_conditioning_latents(
+            audio_path=speaker_wav_paths,
+            **voice_kwargs,
+        )
+
+        if cache_size:
+            # Conditioning may transparently reload the model on CPU after a CUDA
+            # runtime failure. Store under the final model/device identity only.
+            store_key = self._conditioning_cache_key(wrapper, speaker_wav_paths, voice_kwargs)
+            with self._latent_cache_lock:
+                self._latent_cache[store_key] = latents
+                self._latent_cache.move_to_end(store_key)
+                while len(self._latent_cache) > cache_size:
+                    self._latent_cache.popitem(last=False)
+
+        return latents
+
+    def clear_conditioning_cache(self) -> None:
+        with self._latent_cache_lock:
+            self._latent_cache.clear()
+
+    def conditioning_cache_info(self) -> dict[str, int]:
+        with self._latent_cache_lock:
+            return {
+                "entries": len(self._latent_cache),
+                "capacity": max(int(settings.voice_cache_size), 0),
+                "hits": self._latent_cache_hits,
+                "misses": self._latent_cache_misses,
+            }
+
     def generate_speech(self, request: CreateSpeechRequest, model_info: ModelInfo | None = None):
         self.validate_language(request.language)
         wrapper = self._get_wrapper(request.model, model_info)
@@ -203,9 +304,10 @@ class InferenceEngine:
             speaker_embedding = None
 
             if speaker_wav_paths:
-                gpt_cond_latent, speaker_embedding = wrapper.get_conditioning_latents(
-                    audio_path=speaker_wav_paths,
-                    **voice_kwargs,
+                gpt_cond_latent, speaker_embedding = self._get_conditioning_latents(
+                    wrapper,
+                    speaker_wav_paths,
+                    voice_kwargs,
                 )
             else:
                 builtin = self._get_builtin_speaker(wrapper, voice_id)
@@ -250,9 +352,10 @@ class InferenceEngine:
             speaker_embedding = None
 
             if speaker_wav_paths:
-                gpt_cond_latent, speaker_embedding = wrapper.get_conditioning_latents(
-                    audio_path=speaker_wav_paths,
-                    **voice_kwargs,
+                gpt_cond_latent, speaker_embedding = self._get_conditioning_latents(
+                    wrapper,
+                    speaker_wav_paths,
+                    voice_kwargs,
                 )
             else:
                 builtin = self._get_builtin_speaker(wrapper, voice_id)
@@ -280,21 +383,21 @@ class InferenceEngine:
                 yield wav_bytes
 
     async def generate_speech_async(self, request: CreateSpeechRequest, model_info: ModelInfo | None = None):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.generate_speech, request, model_info)
 
     async def generate_speech_stream_async(self, request: CreateSpeechRequest, model_info: ModelInfo | None = None):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         q = asyncio.Queue()
 
         def _run():
             try:
                 for chunk in self.generate_speech_stream(request, model_info):
-                    q.put_nowait(chunk)
-            except Exception as e:
-                q.put_nowait(e)
+                    loop.call_soon_threadsafe(q.put_nowait, chunk)
+            except Exception as e:  # noqa: BLE001 - transferred to the async caller
+                loop.call_soon_threadsafe(q.put_nowait, e)
             finally:
-                q.put_nowait(None)
+                loop.call_soon_threadsafe(q.put_nowait, None)
 
         loop.run_in_executor(None, _run)
 
@@ -307,7 +410,9 @@ class InferenceEngine:
             yield item
 
     def refresh(self):
-        self._models.clear()
+        with self._registry_lock:
+            self._models.clear()
+        self.clear_conditioning_cache()
 
 
 engine = InferenceEngine()

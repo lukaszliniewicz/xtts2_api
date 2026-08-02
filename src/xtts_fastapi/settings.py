@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     enable_text_splitting: bool = False
     stream_chunk_size: int = 20
     overlap_wav_len: int = 1024
-    voice_cache_size: int = 100
+    voice_cache_size: int = Field(default=100, ge=0)
 
     model_config = {"env_prefix": "xtts_", "env_file": ".env"}
 

@@ -3,9 +3,9 @@ import pytest
 import soundfile as sf
 import torch
 
-import src.xtts_fastapi.model_loader as model_loader
+from src.xtts_fastapi import model_loader
 from src.xtts_fastapi.api_models import XTTSParams
-from src.xtts_fastapi.engine import engine
+from src.xtts_fastapi.engine import InferenceEngine, engine
 from src.xtts_fastapi.errors import APIError
 from src.xtts_fastapi.model_loader import XTTSWrapper
 
@@ -42,6 +42,70 @@ def test_voice_kwargs_include_voice_conditioning_fields():
     assert kwargs["gpt_cond_chunk_len"] == 3
     assert kwargs["max_ref_length"] == 10
     assert kwargs["sound_norm_refs"] is True
+
+
+def test_conditioning_latents_are_cached_by_reference_fingerprint(monkeypatch, tmp_path):
+    sample = tmp_path / "sample.wav"
+    sample.write_bytes(b"first")
+
+    class FakeWrapper:
+        device = "cpu"
+
+        def __init__(self):
+            self.model = object()
+            self.calls = 0
+
+        def get_conditioning_latents(self, *, audio_path, **kwargs):
+            self.calls += 1
+            return (f"gpt-{self.calls}", f"speaker-{self.calls}")
+
+    monkeypatch.setattr("src.xtts_fastapi.engine.settings.voice_cache_size", 2)
+    local_engine = InferenceEngine()
+    wrapper = FakeWrapper()
+    kwargs = {"gpt_cond_len": 12}
+
+    first = local_engine._get_conditioning_latents(wrapper, [str(sample)], kwargs)
+    second = local_engine._get_conditioning_latents(wrapper, [str(sample)], kwargs)
+
+    assert first == second
+    assert wrapper.calls == 1
+    assert local_engine.conditioning_cache_info() == {
+        "entries": 1,
+        "capacity": 2,
+        "hits": 1,
+        "misses": 1,
+    }
+
+    sample.write_bytes(b"changed-reference")
+    third = local_engine._get_conditioning_latents(wrapper, [str(sample)], kwargs)
+
+    assert third != first
+    assert wrapper.calls == 2
+
+
+def test_conditioning_cache_tracks_model_reloads(monkeypatch, tmp_path):
+    sample = tmp_path / "sample.wav"
+    sample.write_bytes(b"voice")
+
+    class FakeWrapper:
+        device = "cuda"
+
+        def __init__(self):
+            self.model = object()
+            self.calls = 0
+
+        def get_conditioning_latents(self, *, audio_path, **kwargs):
+            self.calls += 1
+            return (self.calls, self.calls)
+
+    monkeypatch.setattr("src.xtts_fastapi.engine.settings.voice_cache_size", 4)
+    local_engine = InferenceEngine()
+    wrapper = FakeWrapper()
+
+    assert local_engine._get_conditioning_latents(wrapper, [str(sample)], {}) == (1, 1)
+    wrapper.model = object()
+    assert local_engine._get_conditioning_latents(wrapper, [str(sample)], {}) == (2, 2)
+    assert wrapper.calls == 2
 
 
 def test_xtts_params_accepts_legacy_max_ref_len_alias():

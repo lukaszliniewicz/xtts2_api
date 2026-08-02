@@ -356,6 +356,7 @@ XTTS_REPETITION_PENALTY=5.0
 | `XTTS_MIN_REF_AUDIO_SECONDS` | `0.5` | Minimum reference clip duration |
 | `XTTS_STREAM_CHUNK_SIZE` | `20` | |
 | `XTTS_OVERLAP_WAV_LEN` | `1024` | |
+| `XTTS_VOICE_CACHE_SIZE` | `100` | Maximum reference-voice conditioning tensors retained in an LRU cache; `0` disables it |
 
 When `XTTS_COQUI_TOS_AGREED=true` (default), the launcher and server set
 `COQUI_TOS_AGREED=1` automatically before model download/load.
@@ -386,6 +387,9 @@ moves the result into `models/XTTS_2.0.2/` to avoid duplicate disk usage.
 If direct download is skipped or fails, it falls back to coqui-tts download and
 the server can still download on first inference.
 Existing `models/v2.0.2/` is reused and copied forward automatically.
+Reference-audio conditioning is also cached in memory by model identity, conditioning settings,
+and file size/mtime. Repeated segments using the same voice therefore skip the voice encoder;
+editing or replacing a reference file produces a new cache key automatically.
 On startup, the launcher validates required model files (`config.json`,
 `model.pth`, `speakers_xtts.pth`, `vocab.json`) and scans `models/` recursively
 for a complete bundle before attempting a new download.
