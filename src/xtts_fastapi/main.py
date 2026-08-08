@@ -463,9 +463,16 @@ async def create_voice(
     return result
 
 
+@app.delete("/v1/audio/voices/{voice_id}")
 @app.delete("/v1/voices/{voice_id}")
 async def delete_voice(voice_id: str):
-    if voice_store.delete(voice_id):
+    try:
+        deleted = voice_store.delete(voice_id)
+    except ValueError as error:
+        raise APIError(
+            str(error), param="voice_id", code="invalid_voice_id", status=400
+        ) from error
+    if deleted:
         engine.clear_conditioning_cache()
         return {"deleted": True, "id": voice_id}
     raise APIError(f"Voice '{voice_id}' not found", param="voice_id", code="voice_not_found", status=404)

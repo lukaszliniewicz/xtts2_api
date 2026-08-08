@@ -157,9 +157,10 @@ stem and normalizes it (lowercase, punctuation/spaces collapsed to `-`).
 For non-cloning backends, this endpoint returns `501 Not Implemented` with a
 clear error message while `GET /v1/audio/voices` still works.
 
-### `DELETE /v1/voices/{voice_id}`
+### `DELETE /v1/audio/voices/{voice_id}`
 
-Delete a voice.
+Delete a voice. `DELETE /v1/voices/{voice_id}` is an equivalent compatibility
+alias.
 
 ### `POST /v1/audio/speech`
 

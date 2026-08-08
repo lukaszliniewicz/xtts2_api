@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.xtts_fastapi.main import app
@@ -42,11 +43,26 @@ def test_create_and_delete_voice():
     ids = [v["voice_id"] for v in resp.json()["data"]]
     assert "test_voice" in ids
 
-    resp = client.delete("/v1/voices/test_voice")
+    resp = client.delete("/v1/audio/voices/test_voice")
     assert resp.status_code == 200
 
     resp = client.delete("/v1/voices/test_voice")
     assert resp.status_code == 404
+
+
+def test_voice_store_rejects_paths_outside_voice_root(tmp_path, monkeypatch):
+    voice_root = tmp_path / "voices"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(settings, "voices_dir", voice_root)
+
+    store = VoiceStore()
+    with pytest.raises(ValueError, match="Invalid voice ID"):
+        store.delete("../outside")
+
+    assert marker.read_text(encoding="utf-8") == "keep"
 
 
 def test_create_voice_auto_id():
