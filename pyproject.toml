@@ -1,7 +1,8 @@
 [project]
 name = "xtts-fastapi"
-version = "0.1.1"
+version = "0.1.2"
 description = "OpenAI-compatible XTTS v2 FastAPI server"
+readme = "README.md"
 requires-python = ">=3.12"
 authors = []
 dependencies = [

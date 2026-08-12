@@ -88,7 +88,7 @@ Server health and status.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "model": "tts_models/multilingual/multi-dataset/xtts_v2",
   "device": "cuda",
   "deepspeed": true,
@@ -99,6 +99,32 @@ Server health and status.
 ### `GET /v1/models`
 
 List available models (OpenAI-compatible).
+
+### `POST /v1/models`
+
+Install a custom fine-tuned XTTS bundle. The multipart request needs a `model_id`
+and exactly one each of `config.json`, `model.pth`, `speakers_xtts.pth`, and
+`vocab.json` in repeated `files` fields. Uploads stream through a hidden staging
+directory and become visible only after the complete bundle is installed.
+
+```bash
+curl --fail-with-body -X POST http://127.0.0.1:8020/v1/models \
+  -F 'model_id=custom/acme-voice' \
+  -F 'files=@config.json;filename=config.json' \
+  -F 'files=@model.pth;filename=model.pth' \
+  -F 'files=@speakers_xtts.pth;filename=speakers_xtts.pth' \
+  -F 'files=@vocab.json;filename=vocab.json'
+```
+
+The response is a `201` OpenAI-style model object with its installed byte count.
+Model IDs are relative paths; existing IDs are never overwritten.
+For safety, this mutation endpoint accepts only loopback clients and requires a
+bounded `Content-Length`; synthesis and read-only endpoints retain their normal
+network behavior.
+
+Set `XTTS_MODELS_DIR` to choose the XTTS model root directly. For compatibility
+with Pandrator Manager, if that variable is unset and `PANDRATOR_MODELS_DIR` is
+set, XTTS stores models in `$PANDRATOR_MODELS_DIR/xtts`.
 
 ### `POST /v1/files`
 

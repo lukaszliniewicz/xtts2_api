@@ -17,6 +17,10 @@ class ModelList(BaseModel):
     data: list[OpenAIModel]
 
 
+class ModelUploadResponse(OpenAIModel):
+    bytes: int
+
+
 class FileObject(BaseModel):
     id: str
     object: str = "file"

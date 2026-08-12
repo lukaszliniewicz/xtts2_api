@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import logging
 import time
@@ -25,6 +26,7 @@ from .api_models import (
     FileListResponse,
     FileObject,
     ModelList,
+    ModelUploadResponse,
     VoiceCreateResponse,
     VoiceList,
     XTTSParams,
@@ -41,6 +43,7 @@ from .logging_setup import (
     reset_request_id,
     set_request_id,
 )
+from .model_uploads import install_model_upload
 from .registry import registry
 from .settings import settings
 from .voices import normalize_voice_id, voice_store
@@ -59,11 +62,12 @@ app_logger = logging.getLogger(APP_LOGGER_NAME)
 access_logger = logging.getLogger(ACCESS_LOGGER_NAME)
 error_logger = logging.getLogger(ERROR_LOGGER_NAME)
 INSTRUCTION_XTTS_FIELDS = set(XTTSParams.model_fields.keys())
+MODEL_UPLOAD_MULTIPART_OVERHEAD_BYTES = 16 * 1024 * 1024
 
 app = FastAPI(
     title="XTTS FastAPI Server",
     description="OpenAI-compatible text-to-speech server",
-    version="0.1.1",
+    version="0.1.2",
     docs_url="/",
 )
 
@@ -72,6 +76,65 @@ def _sanitize_request_id(raw_request_id: str) -> str:
     allowed = {"-", "_", "."}
     sanitized = "".join(ch for ch in raw_request_id.strip() if ch.isalnum() or ch in allowed)
     return sanitized[:128]
+
+
+def _model_upload_preflight_error(request: Request) -> JSONResponse | None:
+    """Reject remote or unsized model writes before multipart parsing begins."""
+    if request.method != "POST" or request.url.path != "/v1/models":
+        return None
+
+    client_host = request.client.host if request.client is not None else ""
+    try:
+        client_address = ipaddress.ip_address(client_host.split("%", maxsplit=1)[0])
+    except ValueError:
+        client_address = None
+    mapped = getattr(client_address, "ipv4_mapped", None)
+    if client_address is None or not (client_address.is_loopback or (mapped and mapped.is_loopback)):
+        return JSONResponse(
+            {
+                "error": {
+                    "message": "Model uploads are restricted to loopback clients",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "model_upload_loopback_only",
+                }
+            },
+            status_code=403,
+        )
+
+    raw_content_length = request.headers.get("content-length")
+    try:
+        content_length = int(raw_content_length or "")
+    except ValueError:
+        content_length = -1
+    if content_length < 0:
+        return JSONResponse(
+            {
+                "error": {
+                    "message": "Model uploads require a valid Content-Length header",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "model_upload_length_required",
+                }
+            },
+            status_code=411,
+        )
+    maximum_request_bytes = (
+        settings.model_upload_max_total_bytes + MODEL_UPLOAD_MULTIPART_OVERHEAD_BYTES
+    )
+    if content_length > maximum_request_bytes:
+        return JSONResponse(
+            {
+                "error": {
+                    "message": f"Model upload request exceeds its limit of {maximum_request_bytes} bytes",
+                    "type": "invalid_request_error",
+                    "param": "files",
+                    "code": "model_upload_too_large",
+                }
+            },
+            status_code=413,
+        )
+    return None
 
 
 @app.middleware("http")
@@ -86,7 +149,9 @@ async def request_context_middleware(request: Request, call_next):
     response: Response | None = None
 
     try:
-        response = await call_next(request)
+        response = _model_upload_preflight_error(request)
+        if response is None:
+            response = await call_next(request)
         return response
     finally:
         duration_ms = (time.perf_counter() - started) * 1000.0
@@ -331,7 +396,7 @@ def _ensure_voice_ingestion_supported() -> None:
 async def health():
     payload = {
         "status": "ok",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "model_count": len(registry.list_models()),
         "voice_count": len(voice_store.list_all()),
         "device": settings.device,
@@ -351,6 +416,16 @@ async def list_models():
     if not models:
         return ModelList(data=[])
     return ModelList(data=[m.to_openai() for m in models])
+
+
+@app.post("/v1/models", response_model=ModelUploadResponse, status_code=201)
+async def create_model(
+    model_id: str | None = Form(default=None, description="Relative XTTS model identifier"),
+    files: list[UploadFile] | None = File(default=None, description="XTTS model bundle files"),
+):
+    if model_id is None:
+        raise APIError("model_id is required", param="model_id", code="missing_model_id")
+    return await install_model_upload(model_id, files or [])
 
 
 @app.post("/v1/files", response_model=VoiceCreateResponse)
