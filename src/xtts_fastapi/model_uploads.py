@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from .api_models import ModelUploadResponse
+from .engine import engine
 from .errors import APIError
 from .registry import MODEL_DISCOVERY_IGNORE_PARTS, MODEL_REQUIRED_FILES, registry
 from .settings import settings
@@ -224,13 +226,55 @@ def _remove_directory(path: Path, root: Path) -> None:
         return
 
 
+def _publish_staged_model(
+    normalized_id: str,
+    root: Path,
+    staging_dir: Path,
+    target: Path,
+    total_bytes: int,
+) -> ModelUploadResponse:
+    """Promote one complete staged bundle under its exact model lock.
+
+    Upload streaming and validation happen before this function.  The final
+    target check, parent creation, promotion, registry refresh, and rollback
+    are serialized with inference and deletion for this model only.
+    """
+    promoted = False
+    with engine.model_lock(normalized_id):
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() or target.is_symlink():
+                raise APIError(
+                    f"Model '{normalized_id}' already exists; overwriting models is not supported",
+                    param="model_id",
+                    code="model_already_exists",
+                    status=409,
+                )
+
+            os.replace(staging_dir, target)
+            promoted = True
+
+            registry.refresh()
+            model_info = registry.get(normalized_id)
+            if model_info is None:
+                raise RuntimeError("published model was not discovered during synchronous registry refresh")
+
+            return ModelUploadResponse(
+                **model_info.to_openai().model_dump(),
+                bytes=total_bytes,
+            )
+        except Exception:
+            if promoted:
+                _remove_directory(target, root)
+                registry.refresh()
+            raise
+
+
 async def install_model_upload(model_id: str, files: list[UploadFile]) -> ModelUploadResponse:
     """Stream an XTTS bundle to hidden staging, then atomically publish it."""
     staging_dir: Path | None = None
     target: Path | None = None
     root: Path | None = None
-    promoted = False
-
     try:
         normalized_id, root, downloads_dir, target = _validate_model_id(model_id)
         uploaded_by_name = _validate_upload_names(files)
@@ -261,31 +305,17 @@ async def install_model_upload(model_id: str, files: list[UploadFile]) -> ModelU
             if filename == "config.json":
                 _validate_xtts_config(staging_dir / filename)
 
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() or target.is_symlink():
-            raise APIError(
-                f"Model '{normalized_id}' already exists; overwriting models is not supported",
-                param="model_id",
-                code="model_already_exists",
-                status=409,
-            )
-        os.replace(staging_dir, target)
-        promoted = True
-
-        registry.refresh()
-        if registry.get(normalized_id) is None:
-            raise RuntimeError("published model was not discovered during synchronous registry refresh")
-
-        return ModelUploadResponse(id=normalized_id, bytes=total_bytes)
+        return await asyncio.to_thread(
+            _publish_staged_model,
+            normalized_id,
+            root,
+            staging_dir,
+            target,
+            total_bytes,
+        )
     except APIError:
-        if promoted and target is not None and root is not None:
-            _remove_directory(target, root)
-            registry.refresh()
         raise
     except Exception as exc:
-        if promoted and target is not None and root is not None:
-            _remove_directory(target, root)
-            registry.refresh()
         raise APIError(
             "Model upload failed before it could be installed",
             param="files",

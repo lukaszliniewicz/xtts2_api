@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+from src.xtts_fastapi import model_uploads
+from src.xtts_fastapi.engine import engine
 from src.xtts_fastapi.errors import APIError
 from src.xtts_fastapi.main import app
 from src.xtts_fastapi.model_uploads import install_model_upload
@@ -53,11 +57,18 @@ def test_upload_model_installs_complete_bundle_and_lists_it(models_root):
     response = _post_model("acme-voice", files)
 
     assert response.status_code == 201
-    assert response.json() == {
+    response_data = response.json()
+    assert response_data == {
         "id": "acme-voice",
         "object": "model",
         "created": 0,
         "owned_by": "xtts-fapi",
+        "is_default": False,
+        "is_local": True,
+        "removable": True,
+        "source": "local",
+        "relative_path": "acme-voice",
+        "bundle_complete": True,
         "bytes": expected_bytes,
     }
     assert {path.name for path in (models_root / "acme-voice").iterdir()} == {
@@ -305,3 +316,41 @@ def test_model_upload_reads_in_bounded_chunks(models_root, monkeypatch):
     assert len(model_upload.read_sizes) >= 5
     assert set(model_upload.read_sizes) == {chunk_size}
     assert all(upload.closed for upload in uploads)
+
+
+def test_upload_promotion_waits_on_exact_model_lock_without_blocking_other_id(models_root, monkeypatch):
+    promotion_started = threading.Event()
+    original_publish = model_uploads._publish_staged_model
+
+    def observed_publish(*args, **kwargs):
+        promotion_started.set()
+        return original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(model_uploads, "_publish_staged_model", observed_publish)
+    upload_result = []
+    upload_error = []
+
+    def run_locked_upload():
+        try:
+            upload_result.append(asyncio.run(install_model_upload("locked", _memory_bundle())))
+        except Exception as error:  # pragma: no cover - assertion below reports unexpected worker errors
+            upload_error.append(error)
+
+    worker = threading.Thread(target=run_locked_upload)
+    with engine.model_lock("locked"):
+        worker.start()
+        assert promotion_started.wait(timeout=2)
+        time.sleep(0.05)
+        assert worker.is_alive()
+        assert not (models_root / "locked").exists()
+
+        other = asyncio.run(install_model_upload("other", _memory_bundle()))
+        assert other.id == "other"
+        assert (models_root / "other").is_dir()
+        assert registry.get("other") is not None
+
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert not upload_error
+    assert upload_result[0].id == "locked"
+    assert (models_root / "locked").is_dir()

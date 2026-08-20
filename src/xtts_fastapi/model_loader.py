@@ -61,9 +61,9 @@ def _configure_cuda_home_from_env() -> None:
 
 _configure_cuda_home_from_env()
 
-import torch
+import torch  # noqa: E402
 
-from .settings import settings
+from .settings import settings  # noqa: E402
 
 if TYPE_CHECKING:
     from .registry import ModelInfo
@@ -573,6 +573,26 @@ class XTTSWrapper:
     @property
     def speaker_manager(self):
         return self._speaker_manager
+
+    def unload(self) -> None:
+        """Release this wrapper's model without touching other wrappers."""
+        model = self.xtts_model
+        self.xtts_model = None
+        self._speaker_manager = None
+        self._loaded = False
+
+        # Do not move or mutate a live model here: inference owns the exact
+        # engine lock while calling this method.  Dropping this reference and
+        # collecting is sufficient for CPU models; empty_cache only releases
+        # allocator blocks that are already unused and does not evict another
+        # live model.
+        del model
+        gc.collect()
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                logger.debug("Unable to release idle CUDA cache after model unload", exc_info=True)
 
     def load(self):
         if self._loaded and self.xtts_model is not None:

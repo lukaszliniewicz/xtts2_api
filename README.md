@@ -88,7 +88,7 @@ Server health and status.
 ```json
 {
   "status": "ok",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "model": "tts_models/multilingual/multi-dataset/xtts_v2",
   "device": "cuda",
   "deepspeed": true,
@@ -98,7 +98,18 @@ Server health and status.
 
 ### `GET /v1/models`
 
-List available models (OpenAI-compatible).
+List available models (OpenAI-compatible). Every model retains the standard
+`id`, `object`, `created`, and `owned_by` fields and also reports lifecycle
+metadata:
+
+| Field | Meaning |
+|-------|---------|
+| `is_default` | The protected built-in XTTS model, whether or not it is cached locally |
+| `is_local` | The model is installed below `XTTS_MODELS_DIR` |
+| `removable` | The model is a complete custom local bundle that can be deleted |
+| `source` | `builtin` or `local` |
+| `relative_path` | Safe path relative to the model root (omitted for the built-in model) |
+| `bundle_complete` | Whether all required XTTS files are present |
 
 ### `POST /v1/models`
 
@@ -121,6 +132,24 @@ Model IDs are relative paths; existing IDs are never overwritten.
 For safety, this mutation endpoint accepts only loopback clients and requires a
 bounded `Content-Length`; synthesis and read-only endpoints retain their normal
 network behavior.
+
+### `DELETE /v1/models/{model_id}`
+
+Delete a complete custom model bundle, including nested IDs such as
+`custom/acme-voice`. The endpoint accepts only loopback clients and removes
+the bundle under an atomic hidden staging rename while holding that model's
+inference lock. The built-in/default model, incomplete bundles, traversal or
+symlink paths, and missing model IDs are refused with a structured error.
+
+```bash
+curl --fail-with-body -X DELETE \
+  http://127.0.0.1:8020/v1/models/custom/acme-voice
+```
+
+The `200` response is `{"id": "custom/acme-voice", "object": "model",
+"deleted": true, "evicted": false}` when the model was not loaded.
+`evicted` is `true` only when a loaded wrapper and its conditioning entries
+were released; unrelated models remain loaded.
 
 Set `XTTS_MODELS_DIR` to choose the XTTS model root directly. For compatibility
 with Pandrator Manager, if that variable is unset and `PANDRATOR_MODELS_DIR` is

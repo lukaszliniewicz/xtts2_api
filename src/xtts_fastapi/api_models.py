@@ -10,6 +10,14 @@ class OpenAIModel(BaseModel):
     object: str = "model"
     created: int = 0
     owned_by: str = "xtts-fapi"
+    # Additive lifecycle metadata.  The OpenAI-compatible fields above remain
+    # the stable contract consumed by existing clients.
+    is_default: bool = False
+    is_local: bool = True
+    removable: bool = False
+    source: str = "local"
+    relative_path: str | None = None
+    bundle_complete: bool = True
 
 
 class ModelList(BaseModel):
@@ -19,6 +27,13 @@ class ModelList(BaseModel):
 
 class ModelUploadResponse(OpenAIModel):
     bytes: int
+
+
+class ModelDeletedResponse(BaseModel):
+    id: str
+    object: str = "model"
+    deleted: bool = True
+    evicted: bool = True
 
 
 class FileObject(BaseModel):

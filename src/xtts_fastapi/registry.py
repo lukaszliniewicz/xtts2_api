@@ -83,10 +83,18 @@ class _ModelWatchHandler(FileSystemEventHandler):
 
 
 class ModelInfo:
-    def __init__(self, model_id: str, path: Path, config: dict | None = None):
+    def __init__(
+        self,
+        model_id: str,
+        path: Path,
+        config: dict | None = None,
+        *,
+        is_builtin: bool = False,
+    ):
         self.model_id = model_id
         self.path = path
         self.config = config or {}
+        self.is_builtin = is_builtin
         self.is_xtts = self._detect_xtts()
 
     def _detect_xtts(self) -> bool:
@@ -94,10 +102,46 @@ class ModelInfo:
             return True
         return "xtts" in self.model_id.lower()
 
+    @property
+    def is_default(self) -> bool:
+        if self.is_builtin or self.model_id == settings.default_model:
+            return True
+
+        try:
+            default_path = (Path(settings.models_dir) / settings.default_model_local_dir).resolve(strict=False)
+            return self.path.resolve(strict=False) == default_path
+        except (OSError, RuntimeError):
+            return False
+
+    def _relative_path(self) -> str | None:
+        if self.is_builtin:
+            return None
+
+        try:
+            root = Path(settings.models_dir).resolve(strict=False)
+            return self.path.resolve(strict=False).relative_to(root).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    def _bundle_complete(self) -> bool:
+        return self.path.is_dir() and not _missing_required_model_files(self.path)
+
     def to_openai(self) -> OpenAIModel:
         from .api_models import OpenAIModel
 
-        return OpenAIModel(id=self.model_id, owned_by="xtts-fapi")
+        is_default = self.is_default
+        is_local = not self.is_builtin and self._relative_path() is not None
+        bundle_complete = self._bundle_complete()
+        return OpenAIModel(
+            id=self.model_id,
+            owned_by="xtts-fapi",
+            is_default=is_default,
+            is_local=is_local,
+            removable=is_local and not is_default and bundle_complete,
+            source="builtin" if self.is_builtin else "local",
+            relative_path=None if is_default else self._relative_path(),
+            bundle_complete=bundle_complete,
+        )
 
 
 class ModelRegistry:
@@ -188,9 +232,26 @@ class ModelRegistry:
             raise unknown_model(model_id)
         return info
 
-    def list_models(self) -> list[ModelInfo]:
+    def list_models(self, *, include_default: bool = False) -> list[ModelInfo]:
         with self._lock:
-            return list(self._models.values())
+            models = list(self._models.values())
+
+        if not include_default:
+            return models
+
+        # The default model is a supported built-in model even before its
+        # local cache has been downloaded.  Do not expose the implementation's
+        # local folder name as a second, removable model when it is present.
+        models = [model for model in models if not model.is_default]
+        models.insert(
+            0,
+            ModelInfo(
+                settings.default_model,
+                Path(settings.models_dir) / settings.default_model_local_dir,
+                is_builtin=True,
+            ),
+        )
+        return models
 
     def refresh(self) -> list[ModelInfo]:
         return self.discover()

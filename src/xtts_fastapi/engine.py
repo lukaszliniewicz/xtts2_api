@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -15,11 +17,12 @@ from .errors import (
     invalid_reference_audio,
     missing_speaker_wav,
     reference_audio_too_short,
+    unknown_model,
     unsupported_language,
 )
 from .file_store import file_store
 from .model_loader import XTTS_LANGUAGES, XTTSWrapper
-from .registry import ModelInfo
+from .registry import ModelInfo, registry
 from .settings import settings
 from .voices import voice_store
 
@@ -51,9 +54,60 @@ class InferenceEngine:
                 self._models[model_id] = XTTSWrapper(model_info)
             return self._models[model_id]
 
+    @contextmanager
+    def model_lock(self, model_id: str) -> Iterator[None]:
+        """Serialize inference and lifecycle changes for exactly one model.
+
+        Callers acquire this lock before touching the wrapper or model files.
+        While held, engine cache/registry locks may be acquired, but the
+        reverse order is never used.
+        """
+        lock = self._get_lock(model_id)
+        with lock:
+            yield
+
+    def _evict_model_locked(self, model_id: str) -> bool:
+        """Drop one wrapper and only its conditioning entries.
+
+        The caller must hold ``model_lock(model_id)``.  Keeping the per-model
+        lock object in place is intentional: a waiting inference cannot race a
+        deletion by observing a newly-created lock.
+        """
+        with self._registry_lock:
+            wrapper = self._models.pop(model_id, None)
+
+        model_object = getattr(wrapper, "xtts_model", None) if wrapper is not None else None
+        model_identity = id(model_object) if model_object is not None else None
+        if model_identity is not None:
+            with self._latent_cache_lock:
+                stale_keys = [key for key in self._latent_cache if key and key[0] == model_identity]
+                for key in stale_keys:
+                    self._latent_cache.pop(key, None)
+
+        if wrapper is not None:
+            wrapper.unload()
+        return wrapper is not None
+
+    def evict_model(self, model_id: str) -> bool:
+        """Evict one model after the caller has completed filesystem work."""
+        with self.model_lock(model_id):
+            return self._evict_model_locked(model_id)
+
+    def ensure_model_available(self, model_id: str, model_info: ModelInfo | None) -> ModelInfo | None:
+        """Re-read a local model after acquiring its lifecycle lock.
+
+        A request that began before deletion may carry a stale ``ModelInfo``.
+        It must fail as not-found after the deletion rather than attempting to
+        load the removed path.
+        """
+        current_info = registry.get(model_id)
+        if model_info is not None and current_info is None:
+            raise unknown_model(model_id)
+        return current_info if current_info is not None else model_info
+
     def validate_language(self, language: str):
         lang = language.split("-")[0]
-        if lang not in [l.split("-")[0] for l in XTTS_LANGUAGES]:
+        if lang not in [language_code.split("-")[0] for language_code in XTTS_LANGUAGES]:
             raise unsupported_language(language)
 
     def _resolve_voice(self, request: CreateSpeechRequest) -> tuple[str, list[str] | None]:
@@ -289,15 +343,14 @@ class InferenceEngine:
 
     def generate_speech(self, request: CreateSpeechRequest, model_info: ModelInfo | None = None):
         self.validate_language(request.language)
-        wrapper = self._get_wrapper(request.model, model_info)
-        voice_id, speaker_wav_paths = self._resolve_voice(request)
-        if speaker_wav_paths:
-            self._validate_reference_audio_paths(speaker_wav_paths)
-        infer_kwargs = self._build_inference_kwargs(request.xtts, for_stream=False)
-        voice_kwargs = self._build_voice_kwargs(request.xtts)
-
-        lock = self._get_lock(request.model)
-        with lock:
+        with self.model_lock(request.model):
+            model_info = self.ensure_model_available(request.model, model_info)
+            wrapper = self._get_wrapper(request.model, model_info)
+            voice_id, speaker_wav_paths = self._resolve_voice(request)
+            if speaker_wav_paths:
+                self._validate_reference_audio_paths(speaker_wav_paths)
+            infer_kwargs = self._build_inference_kwargs(request.xtts, for_stream=False)
+            voice_kwargs = self._build_voice_kwargs(request.xtts)
             wrapper.load()
 
             gpt_cond_latent = None
@@ -337,15 +390,14 @@ class InferenceEngine:
 
     def generate_speech_stream(self, request: CreateSpeechRequest, model_info: ModelInfo | None = None):
         self.validate_language(request.language)
-        wrapper = self._get_wrapper(request.model, model_info)
-        voice_id, speaker_wav_paths = self._resolve_voice(request)
-        if speaker_wav_paths:
-            self._validate_reference_audio_paths(speaker_wav_paths)
-        infer_kwargs = self._build_inference_kwargs(request.xtts, for_stream=True)
-        voice_kwargs = self._build_voice_kwargs(request.xtts)
-
-        lock = self._get_lock(request.model)
-        with lock:
+        with self.model_lock(request.model):
+            model_info = self.ensure_model_available(request.model, model_info)
+            wrapper = self._get_wrapper(request.model, model_info)
+            voice_id, speaker_wav_paths = self._resolve_voice(request)
+            if speaker_wav_paths:
+                self._validate_reference_audio_paths(speaker_wav_paths)
+            infer_kwargs = self._build_inference_kwargs(request.xtts, for_stream=True)
+            voice_kwargs = self._build_voice_kwargs(request.xtts)
             wrapper.load()
 
             gpt_cond_latent = None

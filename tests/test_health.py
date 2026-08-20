@@ -18,7 +18,7 @@ def test_health():
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
-    assert data["version"] == "0.1.2"
+    assert data["version"] == "0.1.3"
 
 
 def test_health_methods():

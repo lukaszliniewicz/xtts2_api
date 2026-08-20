@@ -7,6 +7,7 @@ import logging
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from urllib.parse import unquote
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
@@ -22,6 +23,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import model_loader
 from .api_models import (
     CreateSpeechRequest,
+    ModelDeletedResponse,
     FileDeletedResponse,
     FileListResponse,
     FileObject,
@@ -44,6 +46,7 @@ from .logging_setup import (
     set_request_id,
 )
 from .model_uploads import install_model_upload
+from .model_lifecycle import delete_model as delete_installed_model
 from .registry import registry
 from .settings import settings
 from .voices import normalize_voice_id, voice_store
@@ -67,7 +70,7 @@ MODEL_UPLOAD_MULTIPART_OVERHEAD_BYTES = 16 * 1024 * 1024
 app = FastAPI(
     title="XTTS FastAPI Server",
     description="OpenAI-compatible text-to-speech server",
-    version="0.1.2",
+    version="0.1.3",
     docs_url="/",
 )
 
@@ -79,8 +82,10 @@ def _sanitize_request_id(raw_request_id: str) -> str:
 
 
 def _model_upload_preflight_error(request: Request) -> JSONResponse | None:
-    """Reject remote or unsized model writes before multipart parsing begins."""
-    if request.method != "POST" or request.url.path != "/v1/models":
+    """Reject remote model mutations before parsing or filesystem work."""
+    is_upload = request.method == "POST" and request.url.path == "/v1/models"
+    is_delete = request.method == "DELETE" and request.url.path.startswith("/v1/models")
+    if not is_upload and not is_delete:
         return None
 
     client_host = request.client.host if request.client is not None else ""
@@ -101,6 +106,29 @@ def _model_upload_preflight_error(request: Request) -> JSONResponse | None:
             },
             status_code=403,
         )
+
+    if is_delete:
+        raw_path = request.scope.get("raw_path", b"")
+        if isinstance(raw_path, bytes):
+            decoded_path = unquote(raw_path.decode("utf-8", errors="replace"))
+        else:
+            decoded_path = unquote(str(raw_path))
+        model_prefix = "/v1/models/"
+        if decoded_path.startswith(model_prefix):
+            raw_model_id = decoded_path[len(model_prefix) :]
+            if any(part in {".", ".."} for part in raw_model_id.split("/")):
+                return JSONResponse(
+                    {
+                        "error": {
+                            "message": "model_id contains a reserved, hidden, or unsafe path part",
+                            "type": "invalid_request_error",
+                            "param": "model_id",
+                            "code": "invalid_model_id",
+                        }
+                    },
+                    status_code=400,
+                )
+        return None
 
     raw_content_length = request.headers.get("content-length")
     try:
@@ -396,7 +424,7 @@ def _ensure_voice_ingestion_supported() -> None:
 async def health():
     payload = {
         "status": "ok",
-        "version": "0.1.2",
+        "version": "0.1.3",
         "model_count": len(registry.list_models()),
         "voice_count": len(voice_store.list_all()),
         "device": settings.device,
@@ -412,9 +440,7 @@ async def health():
 
 @app.get("/v1/models", response_model=ModelList)
 async def list_models():
-    models = registry.list_models()
-    if not models:
-        return ModelList(data=[])
+    models = registry.list_models(include_default=True)
     return ModelList(data=[m.to_openai() for m in models])
 
 
@@ -426,6 +452,16 @@ async def create_model(
     if model_id is None:
         raise APIError("model_id is required", param="model_id", code="missing_model_id")
     return await install_model_upload(model_id, files or [])
+
+
+@app.delete("/v1/models", response_model=ModelDeletedResponse)
+async def delete_models_root():
+    return delete_installed_model("")
+
+
+@app.delete("/v1/models/{model_id:path}", response_model=ModelDeletedResponse)
+async def delete_model(model_id: str):
+    return delete_installed_model(model_id)
 
 
 @app.post("/v1/files", response_model=VoiceCreateResponse)
