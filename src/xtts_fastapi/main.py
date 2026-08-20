@@ -35,7 +35,7 @@ from .api_models import (
 )
 from .audio import SUPPORTED_FORMATS
 from .engine import engine
-from .errors import APIError
+from .errors import APIError, unknown_model
 from .file_store import file_store
 from .logging_setup import (
     ACCESS_LOGGER_NAME,
@@ -47,7 +47,7 @@ from .logging_setup import (
 )
 from .model_uploads import install_model_upload
 from .model_lifecycle import delete_model as delete_installed_model
-from .registry import registry
+from .registry import normalize_model_id, registry
 from .settings import settings
 from .voices import normalize_voice_id, voice_store
 
@@ -600,19 +600,16 @@ async def create_speech(body: CreateSpeechRequest):
 
     body = _apply_instruction_overrides(body)
 
-    model_info = registry.get(body.model)
+    model_id = normalize_model_id(body.model)
+    body = body.model_copy(update={"model": model_id})
+    model_info = registry.get(model_id)
     supported_default_ids = {
         settings.default_model,
         "xtts_v2",
         "tts_models/multilingual/multi-dataset/xtts_v2",
     }
-    if model_info is None and body.model not in supported_default_ids:
-        raise APIError(
-            f"Model '{body.model}' not found",
-            param="model",
-            code="model_not_found",
-            status=404,
-        )
+    if model_info is None and model_id not in supported_default_ids:
+        raise unknown_model(model_id)
 
     is_streaming = body.stream_format is not None
 

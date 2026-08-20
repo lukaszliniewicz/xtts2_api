@@ -20,6 +20,47 @@ def test_speech_invalid_model():
     assert resp.status_code in (400, 404)
 
 
+def test_speech_unknown_model_error_uses_canonical_alias():
+    resp = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": r"missing\voice",
+            "input": "Hello",
+            "voice": "test_voice",
+        },
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"] == {
+        "message": "Model 'missing/voice' not found",
+        "type": "invalid_request_error",
+        "param": "model",
+        "code": "model_not_found",
+    }
+
+
+def test_speech_builtin_model_alias_is_canonicalized(monkeypatch):
+    captured = {}
+
+    async def fake_generate(request, model_info=None):
+        captured["model"] = request.model
+        return b"RIFF" + (b"\x00" * 64)
+
+    monkeypatch.setattr("src.xtts_fastapi.main.engine.generate_speech_async", fake_generate)
+
+    resp = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": r"tts_models\multilingual\multi-dataset\xtts_v2",
+            "input": "Hello",
+            "voice": "test_voice",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert captured["model"] == "tts_models/multilingual/multi-dataset/xtts_v2"
+
+
 def test_speech_missing_voice(monkeypatch):
     class FakeWrapper:
         speaker_manager = None

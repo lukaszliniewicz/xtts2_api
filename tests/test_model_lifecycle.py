@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -188,3 +190,110 @@ def test_delete_during_held_model_lock_waits_then_removes(models_root):
     assert not worker.is_alive()
     assert result[0].status_code == 200
     assert not (models_root / "locked").exists()
+
+
+def test_alias_inference_shares_delete_lock_and_evicts_conditioning_cache(
+    models_root, monkeypatch, tmp_path
+):
+    _write_bundle(models_root / "custom" / "acme-voice")
+    registry.refresh()
+
+    class SpeakerManager:
+        speakers = {
+            "alloy": {
+                "gpt_conditioning_latents": object(),
+                "speaker_embedding": object(),
+            }
+        }
+
+    class FakeWrapper:
+        def __init__(self):
+            self.xtts_model = object()
+            self.device = "cpu"
+            self._speaker_manager = SpeakerManager()
+            self.load_started = threading.Event()
+            self.allow_load = threading.Event()
+            self.unloaded = False
+            self.conditioning_calls = 0
+
+        @property
+        def model(self):
+            return self.xtts_model
+
+        @property
+        def speaker_manager(self):
+            return self._speaker_manager
+
+        def load(self):
+            self.load_started.set()
+            assert self.allow_load.wait(timeout=2)
+
+        def get_conditioning_latents(self, *, audio_path, **kwargs):
+            self.conditioning_calls += 1
+            return ("gpt", "speaker")
+
+        def synthesize(self, **kwargs):
+            return {"wav": [0.0, 0.1, 0.0]}
+
+        def unload(self):
+            self.unloaded = True
+            self.xtts_model = None
+
+    wrapper = FakeWrapper()
+    monkeypatch.setattr("src.xtts_fastapi.engine.XTTSWrapper", lambda model_info=None: wrapper)
+    monkeypatch.setattr("src.xtts_fastapi.engine.settings.voice_cache_size", 4)
+
+    inference_result = []
+
+    def run_inference():
+        inference_result.append(
+            client.post(
+                "/v1/audio/speech",
+                json={
+                    "model": r"custom\acme-voice",
+                    "input": "Hello",
+                    "voice": "alloy",
+                },
+            )
+        )
+
+    inference_worker = threading.Thread(target=run_inference)
+    inference_worker.start()
+    assert wrapper.load_started.wait(timeout=2)
+
+    with engine._registry_lock:
+        assert set(engine._models) == {"custom/acme-voice"}
+
+    sample = tmp_path / "sample.wav"
+    sample.write_bytes(b"sample")
+    engine._get_conditioning_latents(wrapper, [str(sample)], {})
+    assert engine.conditioning_cache_info()["entries"] == 1
+
+    delete_started = threading.Event()
+    delete_result = []
+
+    def run_delete():
+        delete_started.set()
+        delete_result.append(client.delete("/v1/models/custom/acme-voice"))
+
+    delete_worker = threading.Thread(target=run_delete)
+    delete_worker.start()
+    assert delete_started.wait(timeout=2)
+
+    canonical_lock = engine._get_lock("custom/acme-voice")
+    assert engine._get_lock(r"custom\acme-voice") is canonical_lock
+    assert not canonical_lock.acquire(blocking=False)
+
+    wrapper.allow_load.set()
+    inference_worker.join(timeout=2)
+    delete_worker.join(timeout=2)
+
+    assert not inference_worker.is_alive()
+    assert not delete_worker.is_alive()
+    assert inference_result[0].status_code == 200
+    assert delete_result[0].status_code == 200
+    assert wrapper.unloaded is True
+    assert engine.conditioning_cache_info()["entries"] == 0
+    with engine._registry_lock:
+        assert "custom/acme-voice" not in engine._models
+        assert not any(key.startswith("custom\\") for key in engine._models)

@@ -22,7 +22,7 @@ from .errors import (
 )
 from .file_store import file_store
 from .model_loader import XTTS_LANGUAGES, XTTSWrapper
-from .registry import ModelInfo, registry
+from .registry import ModelInfo, normalize_model_id, registry
 from .settings import settings
 from .voices import voice_store
 
@@ -43,12 +43,14 @@ class InferenceEngine:
         self._latent_cache_misses = 0
 
     def _get_lock(self, model_id: str) -> Lock:
+        model_id = normalize_model_id(model_id)
         with self._registry_lock:
             if model_id not in self._locks:
                 self._locks[model_id] = Lock()
             return self._locks[model_id]
 
     def _get_wrapper(self, model_id: str, model_info: ModelInfo | None = None) -> XTTSWrapper:
+        model_id = normalize_model_id(model_id)
         with self._registry_lock:
             if model_id not in self._models:
                 self._models[model_id] = XTTSWrapper(model_info)
@@ -62,7 +64,7 @@ class InferenceEngine:
         While held, engine cache/registry locks may be acquired, but the
         reverse order is never used.
         """
-        lock = self._get_lock(model_id)
+        lock = self._get_lock(normalize_model_id(model_id))
         with lock:
             yield
 
@@ -73,6 +75,7 @@ class InferenceEngine:
         lock object in place is intentional: a waiting inference cannot race a
         deletion by observing a newly-created lock.
         """
+        model_id = normalize_model_id(model_id)
         with self._registry_lock:
             wrapper = self._models.pop(model_id, None)
 
@@ -100,6 +103,7 @@ class InferenceEngine:
         It must fail as not-found after the deletion rather than attempting to
         load the removed path.
         """
+        model_id = normalize_model_id(model_id)
         current_info = registry.get(model_id)
         if model_info is not None and current_info is None:
             raise unknown_model(model_id)
@@ -343,9 +347,10 @@ class InferenceEngine:
 
     def generate_speech(self, request: CreateSpeechRequest, model_info: ModelInfo | None = None):
         self.validate_language(request.language)
-        with self.model_lock(request.model):
-            model_info = self.ensure_model_available(request.model, model_info)
-            wrapper = self._get_wrapper(request.model, model_info)
+        model_id = normalize_model_id(request.model)
+        with self.model_lock(model_id):
+            model_info = self.ensure_model_available(model_id, model_info)
+            wrapper = self._get_wrapper(model_id, model_info)
             voice_id, speaker_wav_paths = self._resolve_voice(request)
             if speaker_wav_paths:
                 self._validate_reference_audio_paths(speaker_wav_paths)
@@ -390,9 +395,10 @@ class InferenceEngine:
 
     def generate_speech_stream(self, request: CreateSpeechRequest, model_info: ModelInfo | None = None):
         self.validate_language(request.language)
-        with self.model_lock(request.model):
-            model_info = self.ensure_model_available(request.model, model_info)
-            wrapper = self._get_wrapper(request.model, model_info)
+        model_id = normalize_model_id(request.model)
+        with self.model_lock(model_id):
+            model_info = self.ensure_model_available(model_id, model_info)
+            wrapper = self._get_wrapper(model_id, model_info)
             voice_id, speaker_wav_paths = self._resolve_voice(request)
             if speaker_wav_paths:
                 self._validate_reference_audio_paths(speaker_wav_paths)

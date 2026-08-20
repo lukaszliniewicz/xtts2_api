@@ -35,7 +35,7 @@ MODEL_DISCOVERY_IGNORE_PARTS = {".downloads", "__pycache__"}
 MODEL_WATCH_RELEVANT_FILES = set(MODEL_REQUIRED_FILES)
 
 
-def _normalize_model_id(model_id: str) -> str:
+def normalize_model_id(model_id: str) -> str:
     return model_id.strip().replace("\\", "/").strip("/")
 
 
@@ -181,7 +181,7 @@ class ModelRegistry:
                 )
                 continue
 
-            model_id = _normalize_model_id(relative_folder.as_posix())
+            model_id = normalize_model_id(relative_folder.as_posix())
             if not model_id:
                 continue
             if model_id in discovered:
@@ -222,7 +222,7 @@ class ModelRegistry:
         return found
 
     def get(self, model_id: str) -> ModelInfo | None:
-        normalized = _normalize_model_id(model_id)
+        normalized = normalize_model_id(model_id)
         with self._lock:
             return self._models.get(normalized)
 
